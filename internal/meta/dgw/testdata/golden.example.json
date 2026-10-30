@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "source": "recorded-session-redacted",
+  "notes": "Each entry is one frame recorded from a real session by cmd/dgwprobe: id is a stable name; direction is inbound (gateway -> client) or outbound (client -> gateway); type is the DgwFrameType name from 2umt4-28uxtjh.js; raw_b64 is the payload bytes (standard base64, padded); decoded_json is the JSON the codec produced for the payload; fail, when a string, says decoding this payload must fail and names what the error must contain. The payloads are opaque: this repository has no DGW codec, so nothing here can check them for protocol fidelity.",
+  "frames": [
+    {
+      "id": "inbound-estab-stream",
+      "direction": "inbound",
+      "type": "StreamGroup_EstabStream",
+      "description": "gateway grants the per-conversation stream",
+      "raw_b64": "CgZsY2xpcHkaNwoiY2xpZW50LXRyYWNlLTAwMDEtZXN0YWItc3RyZWFtEgEq",
+      "decoded_json": {
+        "serviceId": "clippy",
+        "headers": {
+          "x-dgw-trace-id": "client-trace-0001-estab-stream"
+        },
+        "group": ["*"]
+      }
+    },
+    {
+      "id": "inbound-stream-group-ack",
+      "direction": "inbound",
+      "type": "StreamGroup_Ack",
+      "description": "gateway acknowledges the first StreamGroup_Data frame",
+      "raw_b64": "Cg0I+uKQngYQACIAqQEA",
+      "decoded_json": {
+        "sequence": {
+          "clientRequestId": 4294967296,
+          "attempt": 0
+        },
+        "group": ["*"],
+        "accepted": true
+      }
+    },
+    {
+      "id": "inbound-stream-group-data",
+      "direction": "inbound",
+      "type": "StreamGroup_Data",
+      "description": "first answer chunk of the conversation stream",
+      "raw_b64": "Ihxjb252LTAwMDEtc3RyZWFtLWRhdGEtY2h1bmstMQ==",
+      "decoded_json": {
+        "path": ["data"],
+        "payload": {
+          "content": "Hello from the recorded session."
+        }
+      }
+    },
+    {
+      "id": "inbound-stream-group-end-of-data",
+      "direction": "inbound",
+      "type": "StreamGroup_EndOfData",
+      "description": "gateway closes the conversation stream",
+      "raw_b64": "CghmaW5pc2hlZBAA",
+      "decoded_json": {
+        "reason": "finished"
+      }
+    },
+    {
+      "id": "inbound-drain",
+      "direction": "inbound",
+      "type": "Drain",
+      "description": "gateway drains the connection",
+      "raw_b64": "MA==",
+      "decoded_json": {
+        "reason": "drain"
+      }
+    },
+    {
+      "id": "inbound-deauth",
+      "direction": "inbound",
+      "type": "Deauth",
+      "description": "gateway revokes the session",
+      "raw_b64": "OAFaCHNlc3Npb24=",
+      "decoded_json": {
+        "authenticated": false,
+        "reason": "session"
+      }
+    },
+    {
+      "id": "inbound-unmapped-frame-type",
+      "direction": "inbound",
+      "type": "FrameType(11)",
+      "description": "a frame type this harness does not map: decoding must fail",
+      "raw_b64": "WA==",
+      "decoded_json": null,
+      "fail": "unmapped frame type"
+    }
+  ]
+}
