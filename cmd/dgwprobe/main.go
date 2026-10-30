@@ -1,22 +1,29 @@
 // Command dgwprobe records DGW WebSocket frames from a real session.
 //
 // It is a recording harness, not a client: it connects with the operator's
-// cookie and access token, walks the documented handshake, prints every frame
-// as {"type","raw_b64","size"} and can write the frames it saw to a golden
-// vector file. It cannot encode or decode frames itself — the real codec is a
-// WebAssembly module that is not in this repository — so the frame type it
-// prints for each payload is "unknown" and the payload is recorded verbatim.
+// session, walks the documented handshake, prints every frame as
+// {"type","raw_b64","size"} and can write what it saw to a golden vector file.
 //
-// WARNING: the format of the frames it records is unverified. The tool claims no
-// interoperability with the live gateway; it exists to capture bytes so a later
-// codec can be checked against them.
+// Frame labels depend on the build:
+//
+//   - default build: there is no codec (the real one is dgwcppbridge.wasm, which
+//     is not in this repository), so every frame is recorded verbatim and
+//     labelled "unknown". Bytes are the evidence; a guessed type would not be.
+//   - -tags wasm_codec with the asset present: frames are decoded and labelled
+//     with their real type, and a decode failure is reported in the description.
+//
+// WARNING: the wire format is unverified. The tool claims no interoperability
+// with the live gateway; it captures bytes so a codec can be checked against
+// them.
 //
 // Usage:
 //
-//	dgwprobe -access-token TOKEN -cookie "ecto_1_sess=..." [-conversation ID]
-//	         [-fbid ID] [-out dgw_golden.json] [-seconds 30]
+//	dgwprobe [-conversation ID] [-fbid ID] [-out dgw_golden.json] [-seconds 30]
+//	         [-endpoint URL] [-proxy URL]
 //
-// Environment fallbacks: META_ACCESS_TOKEN, META_COOKIE.
+// The session comes from the environment: META_ACCESS_TOKEN (required) and
+// META_COOKIE. They are read from the environment rather than flags so a token
+// does not land in shell history.
 package main
 
 import (

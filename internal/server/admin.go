@@ -102,7 +102,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := backendFor(next)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, jsonError("invalid config: "+s.redact(err.Error())))
+		writeJSON(w, http.StatusBadRequest, jsonError("invalid config: "+s.redactWith(next, err.Error())))
 		return
 	}
 
@@ -112,7 +112,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	prevV1 := s.v1Handler()
 	nextV1, err := newV1HandlerFor(next, b)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, jsonError("build v1 handler: "+s.redact(err.Error())))
+		writeJSON(w, http.StatusBadRequest, jsonError("build v1 handler: "+s.redactWith(next, err.Error())))
 		return
 	}
 
@@ -121,7 +121,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		if err := s.applyTr(next); err != nil {
 			s.restore(prevCfg, prevBackend, prevTransport)
 			s.setV1Handler(prevV1)
-			writeJSON(w, http.StatusInternalServerError, jsonError("build transport: "+s.redact(err.Error())))
+			writeJSON(w, http.StatusInternalServerError, jsonError("build transport: "+s.redactWith(next, err.Error())))
 			return
 		}
 		s.state.setTransport(proxy.Current())
@@ -130,11 +130,17 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Save(next); err != nil {
 		s.restore(prevCfg, prevBackend, prevTransport)
 		s.setV1Handler(prevV1)
-		writeJSON(w, http.StatusInternalServerError, jsonError("persist config: "+s.redact(err.Error())))
+		writeJSON(w, http.StatusInternalServerError, jsonError("persist config: "+s.redactWith(next, err.Error())))
 		return
 	}
 
 	s.setV1Handler(nextV1)
+
+	// The previous config, backend and v1 handler are no longer referenced by
+	// any request path (each reads them through the same lock), so their
+	// resources can be released now.
+	releaseBackend(prevBackend)
+	releaseTransport(prevTransport)
 
 	s.adminMu.Lock()
 	s.adminTok = next.AdminToken
@@ -150,6 +156,23 @@ func (s *Server) restore(cfg config.Config, b backend.ChatBackend, tr *http.Tran
 	s.state.swap(cfg, b, tr)
 	if s.applyTr != nil {
 		_ = s.applyTr(cfg)
+	}
+}
+
+// releaseBackend closes a backend the server has stopped publishing. A backend
+// may own a socket or a stream, so dropping the last reference without closing
+// it leaks until the process exits.
+func releaseBackend(b backend.ChatBackend) {
+	if c, ok := b.(interface{ Close() error }); ok {
+		_ = c.Close()
+	}
+}
+
+// releaseTransport drops the idle connections held by a transport the server
+// has stopped publishing. Without it every config change strands a pool.
+func releaseTransport(t *http.Transport) {
+	if t != nil {
+		t.CloseIdleConnections()
 	}
 }
 

@@ -8,7 +8,8 @@ licence and provenance are unknown.
 
 Until the module is present, everything below is inert:
 
-- the default build has no codec; `codec.New()` returns `backend.ErrUnavailable`;
+- the default build has no codec; `codec.New()` returns an error wrapping
+  `backend.ErrUnavailable`;
 - `cmd/wasmcheck` builds and prints a diagnostic, exiting 2;
 - `go test ./...` is green.
 

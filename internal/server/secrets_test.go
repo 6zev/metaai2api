@@ -194,3 +194,69 @@ func TestBackendForRejectsUnknown(t *testing.T) {
 		t.Fatalf("message should name %q: %s", config.BackendMock, err)
 	}
 }
+
+// TestShortProxyPasswordDoesNotCorruptErrors is the server-level regression for
+// a one-character proxy password: it must not become a scrub pattern that
+// mangles unrelated words in the error body.
+func TestShortProxyPasswordDoesNotCorruptErrors(t *testing.T) {
+	cfg := baseConfig()
+	cfg.ProxyURL = "http://u:a@10.0.0.1:3128" // password is a single character
+	spy := &transportSpy{failWith: errors.New("chat failed: connect refused")}
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, spy)
+
+	next := cfg
+	next.AgentType = "think_hard"
+	rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders())
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "chat failed") {
+		t.Fatalf("a short secret corrupted the message: %s", rec.Body)
+	}
+	if !strings.Contains(body, "connect refused") {
+		t.Fatalf("a short secret corrupted the message: %s", rec.Body)
+	}
+	if strings.Contains(body, "ch***") {
+		t.Fatalf("mask spliced into a word: %s", rec.Body)
+	}
+}
+
+// TestRejectedUpdateScrubsSecretsOnlyInTheRequest covers the gap the review
+// found: a value that exists only in the rejected payload was not scrubbed,
+// because the message was scrubbed with the active config alone.
+func TestRejectedUpdateScrubsSecretsOnlyInTheRequest(t *testing.T) {
+	const newAPIToken = "NEW-API-TOKEN-5555"
+	cfg := baseConfig()
+	cfg.APIToken = "old-api-token-0000"
+	// The transport hook fails with an error that quotes the incoming token.
+	spy := &transportSpy{failWith: errors.New("build failed with " + newAPIToken)}
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, spy)
+
+	next := cfg
+	next.APIToken = newAPIToken
+	rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders())
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), newAPIToken) {
+		t.Fatalf("rected update leaked the incoming token: %s", rec.Body)
+	}
+}
+
+// TestProxyURLMarkerIsReadable pins that redaction does not percent-encode the
+// mask, which made the operator read "http://%2A%2A%2A@host".
+func TestProxyURLMarkerIsReadable(t *testing.T) {
+	cfg := baseConfig()
+	cfg.ProxyURL = "http://alice:hunter2@10.4.4.4:3128"
+
+	got := cfg.Redacted().ProxyURL
+	if strings.Contains(got, "%2A") {
+		t.Fatalf("mask is percent-encoded: %q", got)
+	}
+	if !strings.Contains(got, "10.4.4.4:3128") {
+		t.Fatalf("host and port must survive: %q", got)
+	}
+	if strings.Contains(got, "hunter2") || strings.Contains(got, "alice") {
+		t.Fatalf("credentials survived: %q", got)
+	}
+}

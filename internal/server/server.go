@@ -373,6 +373,14 @@ func (s *Server) secrets() []string {
 	return Secrets(s.Config())
 }
 
+// redactWith scrubs text produced while applying next. The active config alone
+// is not enough: a rejected update may quote a value that exists only in the
+// configuration being applied, and that value must not reach the client just
+// because it was not yet live.
+func (s *Server) redactWith(next config.Config, msg string) string {
+	return redact.Secrets(msg, append(Secrets(s.Config()), Secrets(next)...)...)
+}
+
 // redactedMessage returns err's text with every secret replaced. Error text is
 // arbitrary: a URL parser, a JSON decoder or an upstream may quote the input.
 // It delegates to internal/redact so the /v1 surface scrubs identically.

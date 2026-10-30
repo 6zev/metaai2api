@@ -105,9 +105,16 @@ so it cannot drift from what `Config.Redacted()` masks; a test fails if a masked
 field is not also scrubbed.
 
 That includes proxy credentials. A proxy URL is logged and served with its
-scheme, host and port intact and its userinfo replaced. Error text is scrubbed of
-the password in both its encoded and decoded spellings, because a dial error may
-quote either.
+scheme, host and port intact and its userinfo replaced by `***`, so
+`http://alice:hunter2@10.0.0.1:3128` appears as `http://***@10.0.0.1:3128`. Error
+text is scrubbed of the password in both its encoded and decoded spellings,
+because a dial error may quote either.
+
+Values shorter than four characters are never used as scrub patterns. Substring
+replacement has no word boundary, so a one-character proxy password would splice
+the mask into every unrelated word and make the error unreadable. A secret that
+short is not really protected; `redact.Usable` exists so a caller can warn about
+it at startup.
 
 `PUT /admin/config` rebuilds the `/v1` handler along with the rest of the state,
 so a rotated cookie or `api_token` takes effect immediately instead of leaving a

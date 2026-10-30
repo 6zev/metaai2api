@@ -172,7 +172,8 @@ func (c Config) Redacted() Config {
 // redaction, the admin surface and the startup log, so the three can never
 // drift apart. An unparseable value is redacted whole.
 func RedactProxyURL(raw string) string {
-	if strings.TrimSpace(raw) == "" {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return ""
 	}
 	u, err := url.Parse(raw)
@@ -180,14 +181,21 @@ func RedactProxyURL(raw string) string {
 		return RedactedSecret
 	}
 	if u.User == nil {
-		return u.String()
+		return raw
 	}
-	// Preserve the username only if there is no password; a password is always
-	// hidden with its username, because the pair is the credential.
+	// Rebuild rather than use u.String(): setting User and printing the URL
+	// percent-encodes the mask, so an operator reads "http://%2A%2A%2A@host"
+	// instead of a readable marker. Splice the credentials out of the original
+	// text, which also preserves any formatting the operator typed.
+	if i := strings.LastIndex(raw, "@"); i >= 0 {
+		scheme := raw[:strings.Index(raw, "://")+3]
+		return scheme + RedactedSecret + raw[i:]
+	}
 	if _, hasPassword := u.User.Password(); hasPassword {
-		u.User = url.User(RedactedSecret)
+		return RedactedSecret
 	}
-	return u.Redacted()
+	// A username with no password is not a credential; keep the URL intact.
+	return raw
 }
 
 func redact(s string) string {
