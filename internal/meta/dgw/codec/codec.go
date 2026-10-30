@@ -35,7 +35,7 @@ const AssetName = "dgwcppbridge.wasm"
 const AssetEnv = "DGW_CODEC_WASM"
 
 // compiledAssetPath is where `make fetch-wasm` puts the module: the codec
-// directory, which is what embed_wasm.go embeds and what the tagged build looks
+// directory, which is what embed_codec.go embeds and what the tagged build looks
 // for when $DGW_CODEC_WASM is unset. The default build only quotes it.
 var compiledAssetPath = filepath.Join("internal", "meta", "dgw", "codec", AssetName)
 

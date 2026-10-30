@@ -76,10 +76,32 @@ which cookies are set.
 | `GET`/`PUT /admin/config` | Admin only. `PUT` is all-or-nothing |
 | `POST /admin/update` | Admin only. Runs one OTA check |
 | `GET /admin/version` | Admin only |
+| `GET /admin/session` | Admin only. Probes the configured cookie against meta.ai and reports a classification |
 
 Admin routes are registered only when `admin_token` is set. Without it every
 `/admin/*` path except `/admin/health` is `404` — closed by default, not merely
 unauthorized.
+
+`PUT /admin/config` replaces the whole configuration and is all-or-nothing: the
+new value is validated, the new transport built, and only then is anything
+published or persisted. A rejected update leaves the running configuration and
+the live proxy transport exactly as they were.
+
+`listen` cannot be changed at runtime. The listener is bound once at startup, so
+`PUT` rejects a new value with `400` and names the current one — reporting
+success while still serving on the old port would leave the response, the live
+configuration and the file on disk all disagreeing with the process.
+
+`GET /admin/session` is a read-only diagnostic: it runs one fixed persisted query
+and reports `ok`, a classification (`session_expired`, `timeout`,
+`upstream_error`, `not_configured`), and the elapsed time. It takes no
+caller-supplied `doc_id`, so it cannot be used to replay arbitrary documents, and
+it never echoes an upstream body.
+
+Secrets are scrubbed from every outbound message by a single helper
+(`internal/redact`) shared by `/admin/*` and `/v1`. That includes proxy
+credentials: a proxy URL is logged and served with its scheme, host and port
+intact and its userinfo replaced.
 
 Error mapping from the backend: session expired → `401`, unavailable → `503`,
 not implemented → `501`, protocol error → `502`, anything else → `500`.

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/me/metaai2api/internal/config"
+	"github.com/me/metaai2api/internal/meta"
 	"github.com/me/metaai2api/internal/meta/mock"
 	"github.com/me/metaai2api/internal/proxy"
 )
@@ -285,7 +286,7 @@ func TestAdminRoutesNotRegisteredWithoutToken(t *testing.T) {
 	cfg.AdminToken = ""
 	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, nil)
 
-	for _, path := range []string{"/admin/config", "/admin/version", "/admin/update"} {
+	for _, path := range []string{"/admin/config", "/admin/version", "/admin/update", "/admin/session"} {
 		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPost} {
 			rec := do(s, method, path, `{"listen":":1"}`, adminHeaders())
 			if rec.Code != http.StatusNotFound {
@@ -774,5 +775,37 @@ func TestConfigWireShapeIsSnakeCase(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"interval":"1h30m0s"`) {
 		t.Fatalf("interval not rendered as a duration string: %s", rec.Body)
+	}
+}
+
+// TestSessionDiagnosticDoesNotExposeGraphQLReplay pins the shape of the only
+// route that talks to meta.ai: it takes no caller input beyond the method, so
+// it cannot be used to replay arbitrary persisted queries, and it reports a
+// classification rather than an upstream body (which may quote the cookie).
+func TestSessionDiagnosticDoesNotExposeGraphQLReplay(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Cookie = "datr=x; ecto_1_sess=PROBE-SESSION-SECRET-1234"
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, nil)
+
+	// Query parameters and a body must not influence which document is called.
+	rec := do(s, http.MethodGet, "/admin/session?doc_id=deadbeef&variables=%7B%7D", "", adminHeaders())
+	assertNoSecrets(t, rec)
+
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, rec.Body)
+	}
+	if _, ok := got["ok"]; !ok {
+		t.Fatalf("response lacks an ok field: %s", rec.Body)
+	}
+	if doc, ok := got["operation"]; !ok || doc != meta.DocEctoHomePromptRouteQuery {
+		t.Fatalf("operation = %v, want the fixed %q", doc, meta.DocEctoHomePromptRouteQuery)
+	}
+	// The probe must not echo an arbitrary caller-supplied doc_id.
+	if strings.Contains(rec.Body.String(), "deadbeef") {
+		t.Fatalf("response reflected the caller-supplied doc_id: %s", rec.Body)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the probe reports failure in the body)", rec.Code)
 	}
 }

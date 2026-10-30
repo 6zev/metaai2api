@@ -29,7 +29,7 @@ None of this is verified for interoperability with the live gateway.
    ```
 
 `make fetch-wasm` copies from `SRC` (a URL is fetched with `curl`) into this
-directory. The file is git-ignored; `embed_wasm.go` embeds it and is the only
+directory. The file is git-ignored; `embed_codec.go` embeds it and is the only
 file that does, so a checkout without it still builds.
 
 ## Building and checking

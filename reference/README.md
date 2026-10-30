@@ -97,7 +97,10 @@ fails against the real server. Instead:
 - `internal/meta/dgw/golden.go` compares against **recorded** bytes.
 - `internal/meta/dgw/backend.go` returns `backend.ErrUnavailable` unless a token,
   a golden vector, and a codec are all supplied.
-- `cmd/dgwprobe` records real sessions into the golden file.
+- `cmd/dgwprobe` records real sessions into the golden file. Without the
+  `wasm_codec` build tag it has no decoder, so it records raw bytes and labels
+  each frame `"unknown"` rather than guessing a type; with the tag it decodes
+  and labels them.
 - `internal/meta/dgw/codec/wazero` (task 11) bridges the real WASM, build-tagged
   `wasm_codec`, so the default build is unaffected while the asset is missing.
 

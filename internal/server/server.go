@@ -128,8 +128,16 @@ func backendFor(cfg config.Config) (backend.ChatBackend, error) {
 	switch cfg.Backend {
 	case config.BackendMock:
 		return newMockBackend(), nil
+	case config.BackendExperimentalDGW:
+		// The DGW backend needs an access token, a recorded golden vector and
+		// the WASM codec, none of which can be created at runtime here. Say so
+		// in operator terms instead of surfacing an internal "not wired".
+		return nil, fmt.Errorf(
+			"backend %q must be selected at startup: it requires %s, updater.dgw_golden_path and a wasm_codec build",
+			cfg.Backend, "access_token")
 	default:
-		return nil, fmt.Errorf("server: backend %q is not wired", cfg.Backend)
+		return nil, fmt.Errorf("unknown backend %q: use %q or %q",
+			cfg.Backend, config.BackendMock, config.BackendExperimentalDGW)
 	}
 }
 
@@ -202,6 +210,10 @@ func (s *Server) mountAdmin() {
 	m.HandleFunc("/admin/config", s.handleConfig)
 	m.HandleFunc("/admin/update", s.handleUpdate)
 	m.HandleFunc("/admin/version", s.handleVersion)
+	// A read-only upstream diagnostic: proves the configured cookie still works.
+	// Registered here, like every other admin route, so it is 404 without a
+	// token rather than silently public.
+	m.HandleFunc("/admin/session", s.handleSession)
 	s.adminMux = m
 }
 

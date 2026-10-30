@@ -35,6 +35,36 @@ import (
 	"github.com/me/metaai2api/internal/meta/dgw"
 )
 
+// codecFor returns a frame codec when one is available in this build.
+//
+// Without the wasm_codec build tag there is no codec, and the prober records
+// bytes it cannot interpret. That is still useful: the bytes are the evidence a
+// later codec is checked against. What it must never do is label a frame with a
+// type it guessed.
+func codecFor() dgw.Codec {
+	return availableCodec()
+}
+
+// classify describes a recorded frame. typeLabel is "unknown" when no codec is
+// present, and the decode error is reported rather than hidden.
+func classify(raw []byte, codec dgw.Codec) (frame dgw.Frame, typeLabel, description string) {
+	frame = dgw.Frame{Direction: dgw.DirectionInbound, Raw: raw}
+	if codec == nil {
+		frame.Type = 0
+		return frame, "unknown",
+			"recorded by dgwprobe; type unknown, no frame codec in this build"
+	}
+	decoded, err := codec.Decode(raw)
+	if err != nil {
+		frame.Type = 0
+		return frame, "unknown",
+			"recorded by dgwprobe; codec could not decode: " + err.Error()
+	}
+	frame.Type = decoded.Type
+	return frame, frame.Type.String(),
+		"recorded by dgwprobe; decoded with the build's frame codec"
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "dgwprobe: %v\n", err)
@@ -91,6 +121,10 @@ func run(args []string) error {
 	}
 	defer conn.Close()
 
+	codec := codecFor()
+	if codec == nil {
+		fmt.Fprintf(os.Stderr, "dgwprobe: no frame codec in this build (rebuild with -tags wasm_codec and a dgwcppbridge.wasm to label frames)\n")
+	}
 	fmt.Fprintf(os.Stderr, "dgwprobe: connected; recording for %ds\n", *seconds)
 	deadline := time.Now().Add(time.Duration(*seconds) * time.Second)
 
@@ -105,7 +139,7 @@ func run(args []string) error {
 		if err != nil {
 			break
 		}
-		frame := dgw.Frame{Direction: dgw.DirectionInbound, Type: 0, Raw: raw}
+		frame, typeLabel, description := classify(raw, codec)
 		line, err := dgw.DescribeFrame(frame)
 		if err != nil {
 			return err
@@ -116,8 +150,8 @@ func run(args []string) error {
 		vectors = append(vectors, dgw.GoldenVector{
 			ID:          fmt.Sprintf("inbound-%04d", len(vectors)+1),
 			Direction:   dgw.DirectionInbound,
-			Type:        "FrameType(0)",
-			Description: "recorded by dgwprobe; type unknown without a codec",
+			Type:        typeLabel,
+			Description: description,
 			RawB64:      base64.StdEncoding.EncodeToString(raw),
 			DecodedJSON: []byte("null"),
 		})
