@@ -197,10 +197,26 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/admin/"):
 		s.serveAdmin(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1":
-		s.v1.ServeHTTP(w, r)
+		s.v1Handler().ServeHTTP(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, jsonError("not found"))
 	}
+}
+
+// v1Handler returns the currently mounted /v1 handler. It is read through the
+// same lock as the rest of the state because PUT /admin/config replaces it: the
+// handler closes over the secret list and the backend, so a stale copy would
+// scrub with the previous cookie and serve from the previous backend.
+func (s *Server) v1Handler() http.Handler {
+	s.state.mu.RLock()
+	defer s.state.mu.RUnlock()
+	return s.v1
+}
+
+func (s *Server) setV1Handler(h http.Handler) {
+	s.state.mu.Lock()
+	s.v1 = h
+	s.state.mu.Unlock()
 }
 
 // mountAdmin registers the token-locked routes. It runs only when a token is
@@ -316,10 +332,45 @@ func (s *Server) updateStatus() updateStatus {
 	return chk()
 }
 
-// secrets returns every secret in the active configuration.
+// Secrets returns every literal string that must never appear in an outbound
+// message, derived from one configuration value.
+//
+// It exists so there is exactly ONE place that decides what counts as a secret.
+// The previous hand-written list omitted ProxyURL, which meant the field that
+// Config.Redacted() was fixed to protect still reached clients whenever a dial
+// error quoted the proxy. Deriving the list here means a new secret field is
+// added to Redacted and to this list in the same edit, or the drift test fails.
+func Secrets(cfg config.Config) []string {
+	redacted := cfg.Redacted()
+	out := make([]string, 0, 6)
+	add := func(v string) {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	add(cfg.Cookie)
+	add(cfg.AccessToken)
+	add(cfg.APIToken)
+	add(cfg.AdminToken)
+	// The raw proxy URL carries credentials verbatim...
+	add(cfg.ProxyURL)
+	// ...and so may its redacted form, if the password was percent-encoded and
+	// the error text quotes the encoded spelling rather than the decoded one.
+	add(redacted.ProxyURL)
+	// A dial error may quote the DECODED password, because url.Parse hands it
+	// back decoded. Add both spellings so either form is scrubbed.
+	if u, err := url.Parse(strings.TrimSpace(cfg.ProxyURL)); err == nil && u.User != nil {
+		if pw, ok := u.User.Password(); ok && pw != "" {
+			add(pw)
+			// Also cover user:password, which is how a URL prints it.
+			add(u.User.Username() + ":" + pw)
+		}
+	}
+	return out
+}
+
 func (s *Server) secrets() []string {
-	cfg := s.Config()
-	return []string{cfg.Cookie, cfg.AccessToken, cfg.APIToken, cfg.AdminToken}
+	return Secrets(s.Config())
 }
 
 // redactedMessage returns err's text with every secret replaced. Error text is

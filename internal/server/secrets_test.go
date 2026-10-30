@@ -1,0 +1,196 @@
+package server
+
+import (
+	"errors"
+	"net/http"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/me/metaai2api/internal/config"
+)
+
+const (
+	proxyPassword = "proxy-pass-secret-9182"
+	proxyUser     = "alice"
+	// The same credential, percent-encoded. An error that quotes the encoded
+	// spelling must not slip past a scrubber that only knows the decoded one.
+	proxyPasswordEncoded = "p%40ss%2Fsecret-9182"
+)
+
+func proxyConfig() config.Config {
+	cfg := baseConfig()
+	cfg.ProxyURL = "http://" + proxyUser + ":" + proxyPassword + "@10.9.8.7:3128"
+	return cfg
+}
+
+// TestSecretsIncludesProxyURL is the drift guard. Every field that Redacted()
+// masks must also be scrubbed from outbound messages; if someone adds a secret
+// to Redacted and forgets this list, the two diverge silently.
+func TestSecretsIncludesProxyURL(t *testing.T) {
+	cfg := proxyConfig()
+	got := Secrets(cfg)
+
+	if !contains(got, cfg.ProxyURL) {
+		t.Fatalf("Secrets() omits the raw proxy URL: %v", got)
+	}
+	for _, want := range []string{cfg.Cookie, cfg.AccessToken, cfg.APIToken, cfg.AdminToken} {
+		if want != "" && !contains(got, want) {
+			t.Fatalf("Secrets() omits %q: %v", want, got)
+		}
+	}
+	// Empty values must not become empty substring replacements, which would
+	// insert the mask between every character.
+	for _, s := range got {
+		if s == "" {
+			t.Fatalf("Secrets() returned an empty string: %v", got)
+		}
+	}
+}
+
+// TestTransportErrorDoesNotLeakProxyCredentials is the HTTP-level test the
+// review asked for: a transport build that fails with an error quoting the
+// proxy URL must produce a clean body.
+func TestTransportErrorDoesNotLeakProxyCredentials(t *testing.T) {
+	cfg := proxyConfig()
+	store := &fakeStore{cfg: cfg}
+	spy := &transportSpy{
+		failWith: errors.New("dial tcp: connect refused via " + cfg.ProxyURL),
+	}
+	s := newTestServer(t, cfg, store, spy)
+
+	next := cfg
+	next.AgentType = "think_hard"
+	rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders())
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+	assertNoPasswordIn(t, rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "connect refused") {
+		t.Fatalf("error text lost its meaning: %s", rec.Body)
+	}
+}
+
+// TestV1DoesNotLeakProxyCredentials covers the other surface: a backend error
+// that quotes the proxy URL.
+func TestV1DoesNotLeakProxyCredentials(t *testing.T) {
+	cfg := proxyConfig()
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
+
+	rec := do(s, http.MethodPost, "/v1/chat/completions",
+		`{"model":"meta-think-fast","messages":[{"role":"user","content":"hi"},{"role":"user","content":""}]}`,
+		map[string]string{"Content-Type": "application/json"})
+
+	// Whatever the status, the body must not carry the password.
+	assertNoPasswordIn(t, rec.Body.String())
+}
+
+// TestSecretsCoversEncodedProxyPassword checks the encoded spelling too: an
+// error can quote either form, because it may come from the URL parser (which
+// returns the encoded text) or from a redacted string.
+func TestSecretsCoversEncodedProxyPassword(t *testing.T) {
+	cfg := baseConfig()
+	cfg.ProxyURL = "http://carol:" + proxyPasswordEncoded + "@203.0.113.9:8080"
+
+	msg := "dial failed for http://carol:" + proxyPasswordEncoded + "@203.0.113.9:8080"
+	got := scrub(msg, Secrets(cfg)...)
+	if strings.Contains(got, proxyPasswordEncoded) {
+		t.Fatalf("encoded proxy password survived scrubbing: %q", got)
+	}
+	// The decoded form must also be covered when it appears.
+	decoded := "dial failed for http://carol:p@ss/secret-9182@203.0.113.9:8080"
+	if got := scrub(decoded, Secrets(cfg)...); strings.Contains(got, "p@ss/secret-9182") {
+		t.Fatalf("decoded proxy password survived scrubbing: %q", got)
+	}
+}
+
+// TestPutConfigRebuildsV1Handler pins that a config swap does not leave a stale
+// /v1 handler behind: the handler closes over the secret list, so after a PUT
+// it must scrub with the new cookie.
+func TestPutConfigRebuildsV1Handler(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Cookie = "datr=x; ecto_1_sess=OLD-COOKIE-VALUE-1111"
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
+
+	before := s.v1Handler()
+
+	next := cfg
+	next.Cookie = "datr=x; ecto_1_sess=NEW-COOKIE-VALUE-2222"
+	if rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders()); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+
+	after := s.v1Handler()
+	if before == after {
+		t.Fatal("/v1 handler was not rebuilt after a config change; it still scrubs with the old secret list")
+	}
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func scrub(msg string, secrets ...string) string {
+	for _, s := range secrets {
+		if s != "" {
+			msg = strings.ReplaceAll(msg, s, "***")
+		}
+	}
+	return msg
+}
+
+// assertNoPasswordIn fails if the response carries the proxy password in any
+// spelling the test knows about.
+func assertNoPasswordIn(t *testing.T, body string) {
+	t.Helper()
+	for _, secret := range []string{proxyPassword, proxyPasswordEncoded, "p@ss/secret-9182"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("response leaks proxy credential %q:\n%s", secret, body)
+		}
+	}
+	if regexp.MustCompile(proxyUser + `:[^@"]+@10\.9\.8\.7`).MatchString(body) {
+		t.Fatalf("response leaks proxy userinfo:\n%s", body)
+	}
+}
+
+// TestBackendForExplainsExperimentalDGW pins the operator-facing message. The
+// earlier wording ("is not wired") described an internal fact instead of what
+// the operator must do, and nothing caught a regression to it.
+func TestBackendForExplainsExperimentalDGW(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Backend = config.BackendExperimentalDGW
+
+	_, err := backendFor(cfg)
+	if err == nil {
+		t.Fatal("experimental-dgw must not resolve without its prerequisites")
+	}
+	msg := err.Error()
+	for _, want := range []string{"at startup", "access_token", "dgw_golden_path", "wasm_codec"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("message should mention %q, got: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "not wired") {
+		t.Fatalf("message regressed to the internal phrasing: %s", msg)
+	}
+}
+
+// TestBackendForRejectsUnknown names both valid options.
+func TestBackendForRejectsUnknown(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Backend = "nope"
+
+	_, err := backendFor(cfg)
+	if err == nil {
+		t.Fatal("unknown backend must be an error")
+	}
+	if !strings.Contains(err.Error(), config.BackendMock) {
+		t.Fatalf("message should name %q: %s", config.BackendMock, err)
+	}
+}

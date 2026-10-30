@@ -106,10 +106,21 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The /v1 handler closes over the backend and the secret list, so it must be
+	// rebuilt whenever either can have changed. Building it before anything is
+	// published keeps the update all-or-nothing.
+	prevV1 := s.v1Handler()
+	nextV1, err := newV1HandlerFor(next, b)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, jsonError("build v1 handler: "+s.redact(err.Error())))
+		return
+	}
+
 	prevCfg, prevBackend, prevTransport := s.state.swap(next, b, nil)
 	if s.applyTr != nil {
 		if err := s.applyTr(next); err != nil {
 			s.restore(prevCfg, prevBackend, prevTransport)
+			s.setV1Handler(prevV1)
 			writeJSON(w, http.StatusInternalServerError, jsonError("build transport: "+s.redact(err.Error())))
 			return
 		}
@@ -118,9 +129,12 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.store.Save(next); err != nil {
 		s.restore(prevCfg, prevBackend, prevTransport)
+		s.setV1Handler(prevV1)
 		writeJSON(w, http.StatusInternalServerError, jsonError("persist config: "+s.redact(err.Error())))
 		return
 	}
+
+	s.setV1Handler(nextV1)
 
 	s.adminMu.Lock()
 	s.adminTok = next.AdminToken

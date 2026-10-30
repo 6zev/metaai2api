@@ -99,9 +99,19 @@ caller-supplied `doc_id`, so it cannot be used to replay arbitrary documents, an
 it never echoes an upstream body.
 
 Secrets are scrubbed from every outbound message by a single helper
-(`internal/redact`) shared by `/admin/*` and `/v1`. That includes proxy
-credentials: a proxy URL is logged and served with its scheme, host and port
-intact and its userinfo replaced.
+(`internal/redact`) shared by `/admin/*` and `/v1`. The list of what counts as a
+secret is derived in one place (`server.Secrets`) from the active configuration,
+so it cannot drift from what `Config.Redacted()` masks; a test fails if a masked
+field is not also scrubbed.
+
+That includes proxy credentials. A proxy URL is logged and served with its
+scheme, host and port intact and its userinfo replaced. Error text is scrubbed of
+the password in both its encoded and decoded spellings, because a dial error may
+quote either.
+
+`PUT /admin/config` rebuilds the `/v1` handler along with the rest of the state,
+so a rotated cookie or `api_token` takes effect immediately instead of leaving a
+handler that scrubs with the previous secrets.
 
 Error mapping from the backend: session expired → `401`, unavailable → `503`,
 not implemented → `501`, protocol error → `502`, anything else → `500`.
