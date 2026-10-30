@@ -13,6 +13,7 @@ import (
 	"time"
 
 	backend "github.com/me/metaai2api/internal/backend"
+	"github.com/me/metaai2api/internal/redact"
 )
 
 // Options configures the /v1 handler.
@@ -25,6 +26,10 @@ type Options struct {
 	APIToken string
 	// Now overrides the clock used for created timestamps in tests. Optional.
 	Now func() time.Time
+	// Secrets are scrubbed from every error message this handler writes. The
+	// server passes the configured cookie, access token and API tokens so an
+	// upstream that echoes one back cannot leak it to a client.
+	Secrets []string
 }
 
 // Handler serves the /v1 routes.
@@ -32,6 +37,7 @@ type Handler struct {
 	backend  backend.ChatBackend
 	apiToken string
 	now      func() time.Time
+	secrets  []string
 }
 
 // New returns the /v1 handler ready to mount. It rejects a nil backend: a
@@ -40,11 +46,16 @@ func New(opts Options) (*Handler, error) {
 	if opts.Backend == nil {
 		return nil, errors.New("openai: backend is required")
 	}
+	secrets := make([]string, 0, len(opts.Secrets)+1)
+	secrets = append(secrets, opts.Secrets...)
+	if opts.APIToken != "" {
+		secrets = append(secrets, opts.APIToken)
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &Handler{backend: opts.Backend, apiToken: opts.APIToken, now: now}, nil
+	return &Handler{backend: opts.Backend, apiToken: opts.APIToken, now: now, secrets: secrets}, nil
 }
 
 // allowedMethods writes a 405 unless the request method is one of want.
@@ -116,7 +127,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.backend.Complete(r.Context(), upstream)
 	if err != nil {
-		writeBackendError(w, err)
+		h.writeBackendError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, ChatCompletionResponse{
@@ -197,7 +208,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, id string, crea
 	if streamErr != nil {
 		// Headers are already sent, so report the failure in-band and stop.
 		_ = writeEvent(w, sseError{Error: APIError{
-			Message: streamErr.Error(),
+			Message: redact.Error(streamErr, h.secrets...),
 			Type:    errTypeFor(streamErr),
 		}})
 		flusher.Flush()
@@ -328,12 +339,14 @@ func statusFor(err error) int {
 }
 
 // writeBackendError reports a backend failure before any body was written.
-func writeBackendError(w http.ResponseWriter, err error) {
+func (h *Handler) writeBackendError(w http.ResponseWriter, err error) {
 	msg := err.Error()
 	if errors.Is(err, backend.ErrSessionExpired) {
 		msg = "meta.ai session expired, update META_COOKIE"
 	}
-	writeError(w, statusFor(err), errTypeFor(err), msg)
+	// Upstream text is arbitrary and may quote a cookie fragment or token, so
+	// /v1 scrubs with the same helper the admin surface uses.
+	writeError(w, statusFor(err), errTypeFor(err), redact.Error(errors.New(msg), h.secrets...))
 }
 
 // randomID returns 24 hex characters of randomness for request ids.

@@ -154,14 +154,40 @@ func (c Config) Validate() error {
 
 // Redacted returns a copy safe to log or serve: every secret is replaced with
 // RedactedSecret. The cookie keeps its key names so operators can see which
-// cookies are configured, but no value survives.
+// cookies are configured, but no value survives. A proxy URL keeps its scheme,
+// host and port because they are operationally useful, but any userinfo is
+// stripped, since proxy credentials are secrets too.
 func (c Config) Redacted() Config {
 	out := c
 	out.APIToken = redact(c.APIToken)
 	out.AdminToken = redact(c.AdminToken)
 	out.AccessToken = redact(c.AccessToken)
 	out.Cookie = redactCookie(c.Cookie)
+	out.ProxyURL = RedactProxyURL(c.ProxyURL)
 	return out
+}
+
+// RedactProxyURL hides the credentials in a proxy URL while preserving its
+// scheme, host and port. It is the single implementation used by config
+// redaction, the admin surface and the startup log, so the three can never
+// drift apart. An unparseable value is redacted whole.
+func RedactProxyURL(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return RedactedSecret
+	}
+	if u.User == nil {
+		return u.String()
+	}
+	// Preserve the username only if there is no password; a password is always
+	// hidden with its username, because the pair is the credential.
+	if _, hasPassword := u.User.Password(); hasPassword {
+		u.User = url.User(RedactedSecret)
+	}
+	return u.Redacted()
 }
 
 func redact(s string) string {

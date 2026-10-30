@@ -24,6 +24,7 @@ import (
 
 	backend "github.com/me/metaai2api/internal/backend"
 	"github.com/me/metaai2api/internal/config"
+	"github.com/me/metaai2api/internal/redact"
 	"github.com/me/metaai2api/internal/version"
 )
 
@@ -311,19 +312,9 @@ func (s *Server) secrets() []string {
 
 // redactedMessage returns err's text with every secret replaced. Error text is
 // arbitrary: a URL parser, a JSON decoder or an upstream may quote the input.
+// It delegates to internal/redact so the /v1 surface scrubs identically.
 func redactedMessage(err error, secrets ...string) string {
-	if err == nil {
-		return ""
-	}
-	msg := err.Error()
-	for _, sec := range secrets {
-		sec = strings.TrimSpace(sec)
-		if sec == "" {
-			continue
-		}
-		msg = strings.ReplaceAll(msg, sec, config.RedactedSecret)
-	}
-	return msg
+	return redact.Error(err, secrets...)
 }
 
 // ---- middleware helpers ----

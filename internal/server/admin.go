@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -87,6 +86,15 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+
+	// The listener is bound once at startup and cannot be moved without
+	// restarting. Accepting a new value would report success, persist it, and
+	// leave the process on the old port — so refuse it outright.
+	if next.Listen != s.Config().Listen {
+		writeJSON(w, http.StatusBadRequest, jsonError(
+			"listen cannot be changed at runtime (current "+s.Config().Listen+"); restart with the new value"))
+		return
+	}
 
 	if err := next.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, jsonError("invalid config: "+s.redact(err.Error())))
@@ -230,19 +238,7 @@ func encodeConfig(cfg config.Config) jsonConfig {
 
 func (s *Server) redactedConfig() jsonConfig {
 	red := s.Config().Redacted()
-	red.ProxyURL = redactURLValue(red.ProxyURL)
 	return encodeConfig(red)
-}
-
-func redactURLValue(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return config.RedactedSecret
-	}
-	return u.Redacted()
 }
 
 // redact removes every configured secret from an outbound message. Error text

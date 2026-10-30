@@ -84,6 +84,50 @@ func TestRedactedHidesSecrets(t *testing.T) {
 	}
 }
 
+// TestRedactedHidesProxyCredentials covers the field that is easiest to forget:
+// proxy userinfo arrives from HTTP_PROXY/ALL_PROXY and must not survive
+// redaction, while the host and port stay visible for diagnosis.
+func TestRedactedHidesProxyCredentials(t *testing.T) {
+	cases := []struct {
+		name      string
+		proxyURL  string
+		secrets   []string
+		preserved []string
+	}{
+		{"http with password", "http://alice:proxy-password-123@10.0.0.1:3128",
+			[]string{"proxy-password-123"}, []string{"10.0.0.1:3128"}},
+		{"socks5 with password", "socks5://bob:socks-secret-456@proxy.local:1080",
+			[]string{"socks-secret-456"}, []string{"proxy.local:1080"}},
+		{"encoded password", "http://carol:p%40ss%2Fword@203.0.113.9:8080",
+			[]string{"p@ss/word", "p%40ss%2Fword"}, []string{"203.0.113.9:8080"}},
+		{"no credentials", "http://10.0.0.5:3128", nil, []string{"10.0.0.5:3128"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.ProxyURL = tc.proxyURL
+			got := cfg.Redacted().ProxyURL
+			for _, s := range tc.secrets {
+				if strings.Contains(got, s) {
+					t.Fatalf("Redacted().ProxyURL leaked %q: %q", s, got)
+				}
+			}
+			for _, s := range tc.preserved {
+				if !strings.Contains(got, s) {
+					t.Fatalf("Redacted().ProxyURL dropped %q: %q", s, got)
+				}
+			}
+			if cfg.ProxyURL != tc.proxyURL {
+				t.Fatalf("Redacted() mutated the original proxy URL")
+			}
+		})
+	}
+
+	if got := (Config{ProxyURL: "://not a url"}).Redacted().ProxyURL; got != RedactedSecret {
+		t.Fatalf("unparseable proxy URL = %q, want %q", got, RedactedSecret)
+	}
+}
+
 func TestRedactedEmptyStaysEmpty(t *testing.T) {
 	cfg := Default()
 	red := cfg.Redacted()

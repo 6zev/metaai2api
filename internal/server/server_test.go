@@ -371,8 +371,9 @@ func TestPutConfigSwapsAtomic(t *testing.T) {
 	store := &fakeStore{cfg: baseConfig()}
 	s := newTestServer(t, baseConfig(), store, spy)
 
+	// Everything except listen may change at runtime; the listener itself is
+	// bound once at startup (see TestPutConfigRejectsListenChange).
 	next := baseConfig()
-	next.Listen = ":9999"
 	next.ProxyURL = testProxyURL
 	body := mustJSON(t, next)
 
@@ -382,8 +383,8 @@ func TestPutConfigSwapsAtomic(t *testing.T) {
 	}
 	assertNoSecrets(t, rec)
 
-	if got := s.Config().Listen; got != ":9999" {
-		t.Fatalf("listen = %q, want :9999", got)
+	if got := s.Config().Listen; got != baseConfig().Listen {
+		t.Fatalf("listen = %q, want %q", got, baseConfig().Listen)
 	}
 	if store.saved() != 1 {
 		t.Fatalf("saves = %d, want 1", store.saved())
@@ -393,6 +394,34 @@ func TestPutConfigSwapsAtomic(t *testing.T) {
 	}
 	if proxy.Current() != spy.last() {
 		t.Fatal("published transport is not the one built from the new config")
+	}
+}
+
+// TestPutConfigRejectsListenChange pins the fact that PUT cannot move the
+// listener: reporting 200 while still serving on the old port (and persisting
+// the new value) would leave the response, the live config and the file all
+// disagreeing with the running process.
+func TestPutConfigRejectsListenChange(t *testing.T) {
+	spy := &transportSpy{}
+	store := &fakeStore{cfg: baseConfig()}
+	s := newTestServer(t, baseConfig(), store, spy)
+	before := s.Config()
+
+	next := baseConfig()
+	next.Listen = ":9999"
+	rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders())
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	if got := s.Config().Listen; got != before.Listen {
+		t.Fatalf("listen changed to %q, want %q", got, before.Listen)
+	}
+	if store.saved() != 0 {
+		t.Fatalf("saves = %d, want 0 (nothing must be persisted)", store.saved())
+	}
+	if spy.last() != nil {
+		t.Fatal("transport hook must not run for a rejected config")
 	}
 }
 
@@ -435,16 +464,21 @@ func TestPutConfigInvalidLeavesOldConfig(t *testing.T) {
 		},
 		{
 			name: "transport build fails",
-			mut:  func(c *config.Config) { c.Listen = ":7777" },
+			mut:  func(c *config.Config) { c.AgentType = "think_hard" },
 			spy: &transportSpy{failWith: errors.New("tls: " + testAccess),
-				failOnCfg: ptrConfig(func(c *config.Config) { c.Listen = ":7777" })},
+				failOnCfg: ptrConfig(func(c *config.Config) { c.AgentType = "think_hard" })},
 			want: http.StatusInternalServerError,
 		},
 		{
 			name:  "store save fails",
-			mut:   func(c *config.Config) { c.Listen = ":7777" },
+			mut:   func(c *config.Config) { c.AgentType = "think_hard" },
 			want:  http.StatusInternalServerError,
 			probe: "save",
+		},
+		{
+			name: "listen change rejected",
+			mut:  func(c *config.Config) { c.Listen = ":7777" },
+			want: http.StatusBadRequest,
 		},
 		{
 			name: "undecodable body",
@@ -534,7 +568,7 @@ func TestPutConfigPersistFailureRollsBackTransport(t *testing.T) {
 
 	store.setErr(errors.New("disk full"))
 	next := baseConfig()
-	next.Listen = ":7777"
+	next.AgentType = "think_hard"
 	next.ProxyURL = testProxyURL
 	body := mustJSON(t, next)
 

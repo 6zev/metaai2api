@@ -289,18 +289,25 @@ func TestRedactedStartupLine(t *testing.T) {
 	cfg.AccessToken = "token-secret"
 	cfg.APIToken = "api-secret"
 	cfg.AdminToken = "admin-secret"
+	// Proxy credentials are the easiest secret to forget: they arrive from
+	// HTTP_PROXY/ALL_PROXY and land in the very first log line.
+	cfg.ProxyURL = "http://alice:proxy-password-123@10.0.0.1:3128"
 
 	line := startupLine(cfg)
 	if !strings.Contains(line, `backend="mock"`) {
 		t.Fatalf("startup line lacks backend:\n%s", line)
 	}
-	for _, secret := range []string{"supersecret", "token-secret", "api-secret", "admin-secret"} {
+	for _, secret := range []string{"supersecret", "token-secret", "api-secret", "admin-secret", "proxy-password-123"} {
 		if strings.Contains(line, secret) {
 			t.Fatalf("startup line leaks %q:\n%s", secret, line)
 		}
 	}
 	if !strings.Contains(line, "datr=***") {
 		t.Fatalf("startup line should keep the cookie names it masks:\n%s", line)
+	}
+	// The proxy host and port stay useful; only the credentials go.
+	if !strings.Contains(line, "10.0.0.1:3128") {
+		t.Fatalf("startup line dropped the proxy host, which is not secret:\n%s", line)
 	}
 }
 

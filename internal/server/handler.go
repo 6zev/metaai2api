@@ -14,5 +14,11 @@ func newV1Handler(cfg config.Config) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return openai.New(openai.Options{Backend: b, APIToken: cfg.APIToken})
+	return openai.New(openai.Options{
+		Backend:  b,
+		APIToken: cfg.APIToken,
+		// The same values the admin surface scrubs, so a backend error that
+		// quotes a cookie or token cannot reach a /v1 client either.
+		Secrets: []string{cfg.Cookie, cfg.AccessToken, cfg.APIToken, cfg.AdminToken},
+	})
 }
