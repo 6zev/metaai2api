@@ -1,0 +1,9 @@
+--"-
+Content-Type: application/json; charset=utf-8
+
+{"data":{"conversation":{"id":"c1f0b6a2-9e59-4cc9-9b3f-0d6f7b1f6a2e","title":"Shortest distance between two points in a city","messages":{"edges":[]},"lastSeenMessageId":null}}}
+--"-
+Content-Type: application/json; charset=utf-8
+
+{"path":["conversation","messages"],"data":{"edges":[{"node":{"id":"m-0001","text":"What is the shortest path?","role":"USER"}}]},"label":"preload","hasNext":false}
+--"---
