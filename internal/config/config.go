@@ -138,7 +138,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: unsupported proxy_url scheme %q", u.Scheme)
 		}
 		if u.Host == "" {
-			return fmt.Errorf("config: proxy_url %q has no host", c.ProxyURL)
+			return fmt.Errorf("config: proxy_url %q has no host", RedactProxyURL(c.ProxyURL))
 		}
 	}
 	if c.Cookie != "" {

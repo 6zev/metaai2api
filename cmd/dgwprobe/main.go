@@ -18,12 +18,12 @@
 //
 // Usage:
 //
-//	dgwprobe [-conversation ID] [-fbid ID] [-out dgw_golden.json] [-seconds 30]
-//	         [-endpoint URL] [-proxy URL]
+//	dgwprobe [-access-token TOKEN] [-cookie VALUE] [-conversation ID] [-fbid ID]
+//	         [-endpoint URL] [-proxy URL] [-out dgw_golden.json] [-seconds 30]
 //
-// The session comes from the environment: META_ACCESS_TOKEN (required) and
-// META_COOKIE. They are read from the environment rather than flags so a token
-// does not land in shell history.
+// Every flag falls back to an environment variable, and the session should be
+// supplied that way: META_ACCESS_TOKEN (required) and META_COOKIE. Passing a
+// token as a flag works but records it in shell history.
 package main
 
 import (

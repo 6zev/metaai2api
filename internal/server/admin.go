@@ -97,7 +97,9 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := next.Validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, jsonError("invalid config: "+s.redact(err.Error())))
+		// Validate may quote a value from the configuration being applied, so
+		// scrub with that configuration, not only the active one.
+		writeJSON(w, http.StatusBadRequest, jsonError("invalid config: "+s.redactWith(next, err.Error())))
 		return
 	}
 	b, err := backendFor(next)
@@ -136,9 +138,9 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 
 	s.setV1Handler(nextV1)
 
-	// The previous config, backend and v1 handler are no longer referenced by
-	// any request path (each reads them through the same lock), so their
-	// resources can be released now.
+	// Nothing holds the previous backend or the previous transport any more:
+	// requests read them through the same lock, and the handler was replaced
+	// above. Release them so a PUT does not leak a connection pool or a socket.
 	releaseBackend(prevBackend)
 	releaseTransport(prevTransport)
 

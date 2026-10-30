@@ -263,3 +263,28 @@ func TestExampleConfigLoads(t *testing.T) {
 		t.Fatalf("example config must not carry secrets: %+v", cfg.Redacted())
 	}
 }
+
+// TestValidateDoesNotQuoteProxyCredentials pins the inner defence: Validate's
+// error text is returned to clients by PUT /admin/config, so it must never
+// contain the raw proxy URL. The admin layer scrubs as well; this test covers
+// the case where someone calls Validate directly.
+func TestValidateDoesNotQuoteProxyCredentials(t *testing.T) {
+	const pw = "sk-live-inner-layer-check-99"
+	cfg := Default()
+	cfg.ProxyURL = "http://alice:" + pw + "@"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a proxy URL with no host must fail validation")
+	}
+	if strings.Contains(err.Error(), pw) {
+		t.Fatalf("Validate leaked the proxy password: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no host") {
+		t.Fatalf("Validate lost the useful detail: %v", err)
+	}
+	// The host-less URL is still diagnosable from the redacted form.
+	if !strings.Contains(err.Error(), "***") {
+		t.Fatalf("Validate did not quote a redacted URL: %v", err)
+	}
+}

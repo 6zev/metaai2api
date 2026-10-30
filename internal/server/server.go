@@ -24,6 +24,7 @@ import (
 
 	backend "github.com/me/metaai2api/internal/backend"
 	"github.com/me/metaai2api/internal/config"
+	"github.com/me/metaai2api/internal/proxy"
 	"github.com/me/metaai2api/internal/redact"
 	"github.com/me/metaai2api/internal/version"
 )
@@ -113,7 +114,10 @@ func New(opts Options) (*Server, error) {
 		logger:  opts.Logger,
 		now:     now,
 		applyTr: apply,
-		state:   &state{cfg: cfg, backend: b},
+		// Record the transport that was actually published during startup so a
+		// later config change knows which pool it is replacing. Without this the
+		// field stays nil and nothing is ever released.
+		state: &state{cfg: cfg, backend: b, transport: proxy.Current()},
 	}
 	if strings.TrimSpace(cfg.AdminToken) != "" {
 		s.adminTok = cfg.AdminToken

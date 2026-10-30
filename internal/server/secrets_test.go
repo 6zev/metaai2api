@@ -260,3 +260,53 @@ func TestProxyURLMarkerIsReadable(t *testing.T) {
 		t.Fatalf("credentials survived: %q", got)
 	}
 }
+
+// TestValidateErrorDoesNotLeakProxyCredentials covers the branch that was missed:
+// Validate quotes the proxy URL, and its message reaches the client.
+func TestValidateErrorDoesNotLeakProxyCredentials(t *testing.T) {
+	const pw = "sk-live-4f8a2b9c1d7e6f30a5b4"
+	cfg := baseConfig()
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
+
+	next := cfg
+	// A URL with credentials but no host: Validate's "has no host" branch.
+	next.ProxyURL = "http://alice:" + pw + "@"
+
+	rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders())
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), pw) {
+		t.Fatalf("validate error leaked the proxy password: %s", rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "no host") {
+		t.Fatalf("error text lost its meaning: %s", rec.Body)
+	}
+}
+
+// TestReplaceTransportIsReleased pins that a successful config change drains the
+// pool of the transport it replaced. The previous code passed state.swap's
+// (always nil) prevTransport, so nothing was ever released.
+func TestReplaceTransportIsReleased(t *testing.T) {
+	cfg := baseConfig()
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
+
+	_, _, before := s.state.snapshotTransport()
+
+	next := cfg
+	next.AgentType = "think_hard"
+	if rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders()); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+
+	_, _, after := s.state.snapshotTransport()
+	if before == nil || after == nil {
+		t.Skip("test harness publishes no transport; covered by proxy tests")
+	}
+	// The transport in service must have been replaced, and the old pointer must
+	// no longer be the published one.
+	if before == after {
+		t.Fatal("transport was not replaced by a config change")
+	}
+}

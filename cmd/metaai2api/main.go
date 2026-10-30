@@ -35,6 +35,7 @@ import (
 	"github.com/me/metaai2api/internal/meta/dgw/codec"
 	"github.com/me/metaai2api/internal/meta/mock"
 	"github.com/me/metaai2api/internal/openai"
+	"github.com/me/metaai2api/internal/redact"
 	"github.com/me/metaai2api/internal/server"
 	"github.com/me/metaai2api/internal/updater"
 	"github.com/me/metaai2api/internal/version"
@@ -413,6 +414,24 @@ func pollConfig(cfg config.Config) *pollSetup {
 	return &pollSetup{interval: u.Interval.Std()}
 }
 
+// warnUnscrubbableSecrets reports configured secrets that are too short to be
+// scrubbed from error text.
+//
+// Redaction refuses to substitute very short values, because substring
+// replacement has no word boundary and would corrupt every message. The
+// trade-off is that such a value is neither scrubbed from responses nor from
+// logs, so the operator has to hear about it rather than assume it is covered.
+func warnUnscrubbableSecrets(cfg config.Config) {
+	secrets := server.Secrets(cfg)
+	if usable := redact.Usable(secrets...); usable == len(secrets) {
+		return
+	}
+	slog.Warn("some configured secrets are shorter than the redaction floor and will not be scrubbed",
+		slog.Int("secrets", len(secrets)),
+		slog.Int("scrubbable", redact.Usable(secrets...)),
+		slog.Int("minimum_length", redact.MinSecretLen))
+}
+
 // startupLine renders the redacted startup configuration as logfmt.
 func startupLine(cfg config.Config) string {
 	r := cfg.Redacted()
@@ -440,6 +459,7 @@ func serve(ctx context.Context, cfg config.Config, storePath string) error {
 	defer a.close()
 
 	slog.Info("starting " + startupLine(cfg))
+	warnUnscrubbableSecrets(cfg)
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

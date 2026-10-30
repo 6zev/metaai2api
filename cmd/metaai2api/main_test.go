@@ -1,18 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/me/metaai2api/internal/config"
+	"github.com/me/metaai2api/internal/redact"
 )
 
 // TestNoConfigPathUsesDefaults pins the container default: with neither -config
@@ -344,5 +348,38 @@ func TestServeShutsDownCleanly(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("serve did not stop after the context was cancelled")
+	}
+}
+
+// TestWarnUnscrubbableSecrets pins that a short configured secret is reported at
+// startup. redact refuses to substitute it (it would corrupt every message), so
+// the value is not scrubbed anywhere; the operator has to be told.
+func TestWarnUnscrubbableSecrets(t *testing.T) {
+	cfg := config.Default()
+	cfg.ProxyURL = "http://u:a@10.0.0.1:3128" // one-character password
+	cfg.APIToken = "a-long-enough-api-token-1234"
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	warnUnscrubbableSecrets(cfg)
+
+	out := buf.String()
+	if !strings.Contains(out, "will not be scrubbed") {
+		t.Fatalf("no warning emitted for a short secret:\n%s", out)
+	}
+	if !strings.Contains(out, "minimum_length="+strconv.Itoa(redact.MinSecretLen)) {
+		t.Fatalf("warning should name the floor:\n%s", out)
+	}
+
+	// A configuration whose secrets are all long enough must stay quiet.
+	buf.Reset()
+	clean := config.Default()
+	clean.APIToken = "a-long-enough-api-token-1234"
+	warnUnscrubbableSecrets(clean)
+	if buf.Len() != 0 {
+		t.Fatalf("warned about a config with no short secrets:\n%s", buf.String())
 	}
 }
