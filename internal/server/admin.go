@@ -189,11 +189,16 @@ func releaseBackend(b backend.ChatBackend) {
 	}
 }
 
+// closeIdleConnections is the release seam. A transport that has never dialled
+// has no observable pool, so a test cannot see CloseIdleConnections from the
+// outside; swapping this to a counter makes the call itself observable.
+var closeIdleConnections = func(t *http.Transport) { t.CloseIdleConnections() }
+
 // releaseTransport drops the idle connections held by a transport the server
 // has stopped publishing. Without it every config change strands a pool.
 func releaseTransport(t *http.Transport) {
 	if t != nil {
-		t.CloseIdleConnections()
+		closeIdleConnections(t)
 	}
 }
 

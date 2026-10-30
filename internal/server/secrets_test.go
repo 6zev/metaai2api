@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/me/metaai2api/internal/config"
@@ -287,17 +288,23 @@ func TestValidateErrorDoesNotLeakProxyCredentials(t *testing.T) {
 	}
 }
 
-// TestReplaceTransportIsReleased pins that a config change drains the pool of the
-// transport it replaced. The earlier version only asserted that a new pointer
-// was published, which was never in doubt, so it passed even with the release
-// call removed.
+// TestReplaceTransportIsReleased proves the replaced transport's pool is
+// drained, on the exact pointer that was in service.
 //
-// CloseIdleConnections is observed indirectly: a transport that has never
-// dialled has no idle connections, so the test cannot watch them disappear.
-// Instead it asserts the code path is taken by checking that the replaced
-// pointer is no longer the one in service, and that a proxy that is replaced is
-// no longer reachable through proxy.Current().
+// A transport that never dialled has no observable idle pool, so the release is
+// observed through the closeIdleConnections seam. The test fails if the release
+// call is removed, and if the wrong pointer is passed.
 func TestReplaceTransportIsReleased(t *testing.T) {
+	var mu sync.Mutex
+	var closed []*http.Transport
+	prev := closeIdleConnections
+	closeIdleConnections = func(tr *http.Transport) {
+		mu.Lock()
+		closed = append(closed, tr)
+		mu.Unlock()
+	}
+	t.Cleanup(func() { closeIdleConnections = prev })
+
 	cfg := baseConfig()
 	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
 
@@ -312,15 +319,51 @@ func TestReplaceTransportIsReleased(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
 	}
 
-	_, _, after := s.state.snapshotTransport()
-	if after == nil {
-		t.Fatal("no transport in service after the update")
+	mu.Lock()
+	got := append([]*http.Transport(nil), closed...)
+	mu.Unlock()
+
+	if len(got) == 0 {
+		t.Fatal("no transport was released after a config change")
 	}
-	if before == after {
-		t.Fatal("the replaced transport is still recorded as in service")
+	found := false
+	for _, tr := range got {
+		if tr == before {
+			found = true
+		}
 	}
-	if proxy.Current() != after {
-		t.Fatal("proxy.Current() does not match the transport the server publishes")
+	if !found {
+		t.Fatalf("released %d transport(s), none of them the one that was in service", len(got))
+	}
+}
+
+// TestFailedUpdateDoesNotReleaseTransport pins the other half: a rejected update
+// must not drain the pool that is still in service.
+func TestFailedUpdateDoesNotReleaseTransport(t *testing.T) {
+	var mu sync.Mutex
+	released := 0
+	prev := closeIdleConnections
+	closeIdleConnections = func(*http.Transport) {
+		mu.Lock()
+		released++
+		mu.Unlock()
+	}
+	t.Cleanup(func() { closeIdleConnections = prev })
+
+	cfg := baseConfig()
+	spy := &transportSpy{failWith: errors.New("boom")}
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, spy)
+
+	next := cfg
+	next.AgentType = "think_hard"
+	if rec := do(s, http.MethodPut, "/admin/config", string(mustJSON(t, next)), adminHeaders()); rec.Code == http.StatusOK {
+		t.Fatal("the update was supposed to fail")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if released != 0 {
+		t.Fatalf("a rejected update released %d transport(s)", released)
 	}
 }
 
@@ -367,6 +410,17 @@ func TestDecodeErrorNeverReflectsRequestBody(t *testing.T) {
 		{
 			name: "secret in truncated body",
 			body: `{"admin_token":"` + cfg.AdminToken + `","api_token":"` + secret,
+		},
+		{
+			// More than one JSON value: dec.More() catches it after a clean decode.
+			name: "secret in trailing data",
+			body: `{"admin_token":"` + cfg.AdminToken + `"} {"x":"` + secret + `"}`,
+		},
+		{
+			// Garbage before the object: the syntax error quotes a byte, and the
+			// reason must still be a constant.
+			name: "secret after leading garbage",
+			body: `X` + secret + `{"admin_token":"` + cfg.AdminToken + `"}`,
 		},
 	}
 
