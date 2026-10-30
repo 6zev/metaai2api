@@ -1,0 +1,43 @@
+# metaai2api example configuration.
+#
+# Every secret here is a placeholder. Supply real values through environment
+# variables — META_COOKIE, META_ACCESS_TOKEN, API_TOKEN, ADMIN_TOKEN — and keep
+# this file free of live credentials.
+
+# Address the HTTP API listens on.
+listen: ":8080"
+
+# Bearer token required on /v1/*. When empty, /v1 is open (admin stays locked).
+api_token: ""
+
+# Bearer token required on /admin/* except /admin/health. When empty, the
+# admin routes are not registered at all (404).
+admin_token: ""
+
+# meta.ai cookie header, e.g. "datr=...; ecto_1_sess=...; wd=...; dpr=...".
+# Prefer META_COOKIE over putting it here.
+cookie: ""
+
+# DGW viewer access token (raw Authorization value for the WebSocket).
+# Prefer META_ACCESS_TOKEN over putting it here.
+access_token: ""
+
+# Agent profile sent upstream: think_fast or think_hard.
+agent_type: "think_fast"
+
+# Optional proxy for upstream traffic: http, https, socks5, socks5h.
+# Falls back to ALL_PROXY / HTTP_PROXY when empty.
+proxy_url: ""
+
+# Chat backend: mock (default, deterministic, no upstream) or experimental-dgw.
+backend: "mock"
+
+updater:
+  enabled: false
+  owner: "me"
+  repo: "metaai2api"
+  interval: 24h
+  # {os} and {arch} are expanded at runtime.
+  asset_pattern: "metaai2api-{os}-{arch}"
+  # Path to a recorded DGW golden vector. Required by backend: experimental-dgw.
+  dgw_golden_path: ""
