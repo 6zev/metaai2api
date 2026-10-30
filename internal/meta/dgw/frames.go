@@ -89,7 +89,35 @@ type Frame struct {
 	Raw []byte
 	// Payload is the JSON a Codec produced for Raw, when the caller decoded it.
 	Payload []byte
+	// StreamID is the stream a StreamGroup_* frame belongs to (the
+	// conversation group id the codec calls a stream id). It is zero for
+	// frames outside a grouped stream.
+	StreamID StreamID
+	// StreamData is the body a StreamGroup_Data or StreamGroup_EstabStream
+	// frame carries: the JSON payload, or the encoded stream headers.
+	StreamData []byte
+	// Grouped reports whether the codec packed the frame into a stream-group
+	// container (DgwFrameEncodeResult_Grouped) rather than sending it bare.
+	Grouped bool
+	// AckID is the ack the frame asks for or carries (StreamGroup_Ack, and
+	// StreamGroup_Data when RequiresAck is set).
+	AckID uint32
+	// RequiresAck is set on a StreamGroup_Data frame the receiver must ack.
+	RequiresAck bool
+	// DrainReason is the DrainFrame reason code (Drain only).
+	DrainReason uint32
 }
+
+// StreamID is one DGW stream's id, the per-conversation group id. The site
+// allocates it from a pool and the codec encodes it as a 16-bit field, so it is
+// carried as uint32 here and refused above 0xffff by both the codec's encoder
+// and the module.
+type StreamID uint32
+
+// MaxStreamID is the largest stream id the module accepts (its encode paths
+// check the id against 0x7fff and 0xffff and return
+// DgwCodecReturnCode_InvalidArgument).
+const MaxStreamID StreamID = 0x7fff
 
 // Direction says which way a frame travelled.
 type Direction string
