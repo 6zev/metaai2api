@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -74,7 +75,25 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := decodeConfig(body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, jsonError("decode config: "+s.redact(err.Error())))
+		// The decoder's message quotes request text, and a value the caller is
+		// trying to set is not part of any configuration yet, so no scrub list
+		// covers it. Classify for the client; keep the detail in the server log,
+		// scrubbed, where it can be acted on.
+		var de *decodeError
+		reason := "decode config: the request body is not valid JSON"
+		if errors.As(err, &de) {
+			reason = de.Reason
+		}
+		// The detail stays server-side, but it may quote a value the caller was
+		// trying to set, which is not yet part of any config — so it must not be
+		// logged verbatim either. The decoder's message is dropped from the log
+		// for that reason; the reason is enough to diagnose a bad body, and the
+		// offending body is in the operator's own request log if they need it.
+		s.warnLogger().Warn("config body rejected",
+			slog.String("request_id", r.Header.Get("X-Request-Id")),
+			slog.String("reason", reason),
+			slog.Int("body_bytes", len(body)))
+		writeJSON(w, http.StatusBadRequest, jsonError(reason))
 		return
 	}
 	if strings.TrimSpace(next.AdminToken) == "" {
@@ -217,10 +236,10 @@ func decodeConfig(body []byte) (config.Config, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&wire); err != nil {
-		return config.Config{}, err
+		return config.Config{}, classifyDecodeError(err)
 	}
 	if dec.More() {
-		return config.Config{}, errors.New("unexpected trailing data")
+		return config.Config{}, errTrailingData()
 	}
 	cfg := config.Config{
 		Listen:      wire.Listen,
@@ -242,7 +261,8 @@ func decodeConfig(body []byte) (config.Config, error) {
 	if strings.TrimSpace(wire.Updater.Interval) != "" {
 		d, err := time.ParseDuration(strings.TrimSpace(wire.Updater.Interval))
 		if err != nil {
-			return config.Config{}, fmt.Errorf("updater.interval: %w", err)
+			// time.ParseDuration's message quotes the caller's value.
+			return config.Config{}, classifyDecodeError(fmt.Errorf("invalid duration: %w", err))
 		}
 		cfg.Updater.Interval = config.Duration(d)
 	}

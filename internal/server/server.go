@@ -444,6 +444,15 @@ func setCORS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// warnLogger returns the configured logger, or a discard logger when none was
+// supplied, so optional logging never dereferences nil.
+func (s *Server) warnLogger() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.New(slog.DiscardHandler)
+}
+
 func (s *Server) logRequest(reqID string, r *http.Request, status int, d time.Duration) {
 	if s.logger == nil {
 		return

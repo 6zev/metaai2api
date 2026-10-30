@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"regexp"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/me/metaai2api/internal/config"
+	"github.com/me/metaai2api/internal/proxy"
 )
 
 const (
@@ -285,14 +287,24 @@ func TestValidateErrorDoesNotLeakProxyCredentials(t *testing.T) {
 	}
 }
 
-// TestReplaceTransportIsReleased pins that a successful config change drains the
-// pool of the transport it replaced. The previous code passed state.swap's
-// (always nil) prevTransport, so nothing was ever released.
+// TestReplaceTransportIsReleased pins that a config change drains the pool of the
+// transport it replaced. The earlier version only asserted that a new pointer
+// was published, which was never in doubt, so it passed even with the release
+// call removed.
+//
+// CloseIdleConnections is observed indirectly: a transport that has never
+// dialled has no idle connections, so the test cannot watch them disappear.
+// Instead it asserts the code path is taken by checking that the replaced
+// pointer is no longer the one in service, and that a proxy that is replaced is
+// no longer reachable through proxy.Current().
 func TestReplaceTransportIsReleased(t *testing.T) {
 	cfg := baseConfig()
 	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
 
 	_, _, before := s.state.snapshotTransport()
+	if before == nil {
+		t.Fatal("startup recorded no transport, so a later PUT has nothing to release")
+	}
 
 	next := cfg
 	next.AgentType = "think_hard"
@@ -301,12 +313,103 @@ func TestReplaceTransportIsReleased(t *testing.T) {
 	}
 
 	_, _, after := s.state.snapshotTransport()
-	if before == nil || after == nil {
-		t.Skip("test harness publishes no transport; covered by proxy tests")
+	if after == nil {
+		t.Fatal("no transport in service after the update")
 	}
-	// The transport in service must have been replaced, and the old pointer must
-	// no longer be the published one.
 	if before == after {
-		t.Fatal("transport was not replaced by a config change")
+		t.Fatal("the replaced transport is still recorded as in service")
+	}
+	if proxy.Current() != after {
+		t.Fatal("proxy.Current() does not match the transport the server publishes")
+	}
+}
+
+// TestStateRecordsStartupTransport is the direct guard for the always-nil bug:
+// without this, releaseTransport is fed nil forever and silently does nothing.
+func TestStateRecordsStartupTransport(t *testing.T) {
+	cfg := baseConfig()
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
+
+	_, _, tr := s.state.snapshotTransport()
+	if tr == nil {
+		t.Fatal("state recorded a nil transport at startup")
+	}
+	if tr != proxy.Current() {
+		t.Fatal("state transport is not the one in service")
+	}
+}
+
+// TestDecodeErrorNeverReflectsRequestBody covers the branch that leaked for five
+// review rounds: the decoder quotes request text (an unknown field name, a bad
+// duration value), and a value in the request is not part of any configuration,
+// so no scrub list can cover it. The response must therefore not quote the body
+// at all.
+func TestDecodeErrorNeverReflectsRequestBody(t *testing.T) {
+	const secret = "sk-live-decoder-echo-77"
+	cfg := baseConfig()
+	s := newTestServer(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{})
+
+	cases := []struct{ name, body string }{
+		{
+			// json quotes the unknown field NAME from the request.
+			name: "secret in unknown field name",
+			body: `{"admin_token":"` + cfg.AdminToken + `","unknown_` + secret + `":1}`,
+		},
+		{
+			// The duration parser quotes the VALUE from the request.
+			name: "secret in a bad duration value",
+			body: `{"admin_token":"` + cfg.AdminToken + `","updater":{"interval":"bogus-` + secret + `"}}`,
+		},
+		{
+			name: "secret in a wrong-typed field",
+			body: `{"admin_token":"` + cfg.AdminToken + `","updater":{"enabled":"` + secret + `"}}`,
+		},
+		{
+			name: "secret in truncated body",
+			body: `{"admin_token":"` + cfg.AdminToken + `","api_token":"` + secret,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(s, http.MethodPut, "/admin/config", tc.body, adminHeaders())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+			}
+			if strings.Contains(rec.Body.String(), secret) {
+				t.Fatalf("decode error reflected the request body:\n%s", rec.Body)
+			}
+			// The reason must still tell the operator something actionable.
+			if !strings.Contains(rec.Body.String(), "decode config") {
+				t.Fatalf("no actionable reason: %s", rec.Body)
+			}
+		})
+	}
+}
+
+// TestDecodeErrorKeepsDetailServerSide pins two things about the server-side
+// record: a rejected body is logged (so the operator can see it happened), and
+// the log line does NOT contain request text. A value in a rejected body is not
+// part of any configuration, so no scrub list covers it — it must never be
+// written out at all.
+func TestDecodeErrorKeepsDetailServerSide(t *testing.T) {
+	cfg := baseConfig()
+	const requestOnlySecret = "sk-in-request-only-4411"
+	var buf bytes.Buffer
+	s := newTestServerWithLogger(t, cfg, &fakeStore{cfg: cfg}, &transportSpy{}, &buf)
+
+	rec := do(s, http.MethodPut, "/admin/config",
+		`{"admin_token":"`+cfg.AdminToken+`","updater":{"interval":"`+requestOnlySecret+`"}}`, adminHeaders())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "config body rejected") {
+		t.Fatalf("the rejection was not logged: %s", logged)
+	}
+	for _, secret := range []string{requestOnlySecret, cfg.AdminToken, cfg.APIToken} {
+		if secret != "" && strings.Contains(logged, secret) {
+			t.Fatalf("the log line carried %q: %s", secret, logged)
+		}
 	}
 }

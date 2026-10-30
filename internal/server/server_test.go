@@ -148,6 +148,26 @@ func (sp *transportSpy) publishes() int {
 	return len(sp.provided)
 }
 
+// newTestServerWithLogger is newTestServer with a captured log, for asserting
+// what is written server-side.
+func newTestServerWithLogger(t *testing.T, cfg config.Config, store ConfigStore, spy *transportSpy, out *bytes.Buffer) *Server {
+	t.Helper()
+	v1, err := newV1Handler(cfg)
+	if err != nil {
+		t.Fatalf("v1 handler: %v", err)
+	}
+	opts := Options{Config: cfg, Store: store, V1: v1,
+		Logger: slog.New(slog.NewTextHandler(out, nil))}
+	if spy != nil {
+		opts.ApplyTransport = spy.apply
+	}
+	s, err := New(opts)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
+}
+
 func newTestServer(t *testing.T, cfg config.Config, store ConfigStore, spy *transportSpy) *Server {
 	t.Helper()
 	v1, err := newV1Handler(cfg)
