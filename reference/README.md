@@ -77,6 +77,46 @@ Full frame enum, read from the bundle:
 | `StreamGroup_EndOfData` | 14 |
 | `StreamGroup_EstabStream` | 15 |
 
+## 2a. The frame layout, recovered from recordings
+
+Two websocket messages recorded from a live session (`recorded-*.bin` under
+`internal/meta/dgw/testdata`) establish the framing:
+
+| Frame | Layout |
+|---|---|
+| `StreamGroup_EstabStream` (15) | `type(1) streamId(2 LE) len(3 LE)` + body |
+| `StreamGroup_Data` (13) | `type(1) streamId(2 LE) len(3 LE) ack(2 LE)` + body |
+
+`len` is the number of bytes **after** the 6-byte header, so it covers the body
+and, for a Data frame, the 2-byte ack that precedes it. Samples: EstabStream
+declares 127 with a 127-byte body; Data declares 1432 with a 2-byte ack plus a
+1430-byte body. `internal/meta/dgw/frame_decoder_test.go` asserts both.
+
+Still unverified: a data frame that carries no ack, and a streamId above 0xffff.
+
+The body of a client frame is JSON `{"req-id": "...", "payload": "<base64 proto>"}`
+(the transport states this with `x-dgw-app-client-payload-type: PROTO_INSIDE_JSON`).
+
+## 2b. The protobuf schemas ship as descriptors
+
+Two `FileDescriptorProto` blobs are embedded as base64 in `2umt4-28uxntjh.js`:
+
+| Descriptor | Size | Contents |
+|---|---|---|
+| `ecto_request_client.proto` | 25,514 B | outbound prompt: `prompt`, `content`, `conversation_id`, `agent_type`, `attachments`, … |
+| `ecto_response_client.proto` | 6,500 B | inbound reply: `Response`, `ResponsePiece`, `ModelResponse`, `ReasoningResponse`, … |
+
+They were read with `protogen/cmd/descdump`, which parses the descriptor, and Go
+types were generated from them with `protogen/cmd/protogen` (a `protoc`-free
+driver for `protoc-gen-go`). Field numbers come from the descriptor; the
+generated code is pinned by `ectoproto/schema_test.go`, because a wrong field
+number decodes silently into the wrong field.
+
+`internal/meta/dgw/ectostream` decodes a websocket message into text, reasoning,
+progress, error and completion deltas. Verified end-to-end on a recorded frame
+(frame → envelope → protobuf), but **not** against a live server reply: only
+outbound frames were recorded.
+
 ## 3. Why there is no hand-written codec
 
 The bundle calls `__DgwCodecEncodeStreamGroup_Data`, `__DgwCodecDecode`,
@@ -84,9 +124,14 @@ The bundle calls `__DgwCodecEncodeStreamGroup_Data`, `__DgwCodecDecode`,
 … — a **WebAssembly module** called `dgwcppbridge.wasm`, driven through
 `HEAPU8`, `_malloc`, and `WebAssembly.instantiate`.
 
-That module is **not present in the capture**: the loader in `02h3llx9n0qf1.js`
-resolves either an embedded data-URI (there is none — the only base64 data-URI in
-the entire capture is a 1×1 GIF) or a network fetch that was not recorded.
+That module is **not present**: `https://meta.ai/dgwcppbridge.wasm` is a catch-all
+route (any unknown path returns the same 301 to `www.meta.ai`), and hooking
+`WebAssembly.instantiate`, `instantiateStreaming` and `new WebAssembly.Module` in
+a live session captured **zero** wasm modules while the page loaded and called
+GraphQL normally.
+
+So the frame *encoder* is not recoverable from this artifact. The frame *decoder*
+is, because §2a pins the layout from recordings and §2b supplies the schemas.
 
 Consequently the true wire encoding cannot be recovered from this artifact. A
 hand-written codec would be an invention that passes its own round-trip tests and
