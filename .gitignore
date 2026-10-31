@@ -1,3 +1,17 @@
 # The DGW codec module is a human prerequisite: it is not committed (unknown
 # licence and provenance). See internal/meta/dgw/codec/testdata/README.md.
 /internal/meta/dgw/codec/dgwcppbridge.wasm
+
+# local hive state
+.hive/
+.hive2/
+
+# local tooling
+.codegraph/
+
+# build output from the documented commands
+/dgwdecode
+/dgwsend
+/dgwprobe
+/metaai2api
+/dist/
