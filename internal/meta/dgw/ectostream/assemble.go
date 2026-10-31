@@ -359,16 +359,21 @@ func primitiveOf(sec map[string]any) map[string]any {
 func resolveInlineEntities(text string, prim map[string]any) string {
 	ents, _ := prim["inline_entities"].([]any)
 
-	// Index by the entity's own key, which is what the marker names.
+	// The marker names the entity twice over: "{{IE_0}}" carries the digit, and
+	// the entity's own key is "IE_0". Index by both, and by position, because
+	// which of the three the server uses has varied in recorded traffic.
 	byKey := map[string]map[string]any{}
-	for _, e := range ents {
+	for i, e := range ents {
 		m, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
 		if k, ok := m["key"].(string); ok {
 			byKey[k] = m
+			byKey[strings.TrimPrefix(k, "IE_")] = m
 		}
+		byKey[itoa(i)] = m
+		byKey[itoa(i+1)] = m
 	}
 
 	var b strings.Builder
@@ -380,13 +385,18 @@ func resolveInlineEntities(text string, prim map[string]any) string {
 			break
 		}
 		b.WriteString(rest[:start])
-		labelEnd := strings.Index(rest[start:], "}}")
-		if labelEnd < 0 {
+		// Index within the suffix, then make it absolute. Mixing the two gives a
+		// truncated label ("0" instead of "IE_0"), which silently matches no
+		// entity and drops the citation.
+		relEnd := strings.Index(rest[start:], "}}")
+		if relEnd < 0 {
 			rest = rest[start+2:]
 			continue
 		}
-		label := rest[start+len("{{IE_") : start+labelEnd]
-		bodyStart := start + labelEnd + 2
+		// Absolute index of "}}"; the label sits between "{{IE_" and it.
+		closeAt := start + relEnd
+		label := rest[start+len("{{IE_") : closeAt]
+		bodyStart := closeAt + 2
 		closer := "{{/IE_" + label + "}}"
 		bodyEnd := strings.Index(rest[bodyStart:], closer)
 		if bodyEnd < 0 {
