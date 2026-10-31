@@ -230,3 +230,109 @@ func TestDecodeRealInboundAckFrame(t *testing.T) {
 		t.Fatal("an ack is not the end of the stream")
 	}
 }
+
+// buildFrameFromBody wraps a raw Response body the way the recorded frames are
+// shaped: type 13, 2-byte ack, then the body, with len counting everything after
+// the 6-byte header.
+func buildFrameFromBody(body []byte) []byte {
+	n := 2 + len(body)
+	out := []byte{13, 0, 0, byte(n), byte(n >> 8), byte(n >> 16), 0, 0}
+	return append(out, body...)
+}
+
+// TestDecodeDeltasPatch covers the newer streaming shape: a list of JSON-patch
+// edits rather than a text chunk. The path that carries answer text is not
+// confirmed against a live reply, so the decoder surfaces path/op and leaves the
+// interpretation to the caller.
+func TestDecodeDeltasPatch(t *testing.T) {
+	resp := &ectoproto.Response{
+		ResponseId: "r1",
+		Piece: &ectoproto.ResponsePiece{
+			Piece: &ectoproto.ResponsePiece_Deltas{
+				Deltas: &ectoproto.DeltasResponse{
+					Deltas: []*ectoproto.Delta{
+						{Op: "replace", Path: "/text", Value: "Hi", DeltaIndex: 1},
+						{Op: "append", Path: "/text", Value: " there", DeltaIndex: 2},
+					},
+				},
+			},
+		},
+	}
+	raw, err := proto.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	got, err := ectostream.DecodeResponse(buildFrameFromBody(raw))
+	if err != nil {
+		t.Fatalf("DecodeResponse: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d deltas, want 2: %+v", len(got), got)
+	}
+	for i, want := range []struct{ op, path, text string }{
+		{"replace", "/text", "Hi"},
+		{"append", "/text", " there"},
+	} {
+		if got[i].Kind != ectostream.KindDelta {
+			t.Errorf("delta %d kind = %q, want %q", i, got[i].Kind, ectostream.KindDelta)
+		}
+		if got[i].Op != want.op || got[i].Path != want.path || got[i].Text != want.text {
+			t.Errorf("delta %d = {%q %q %q}, want {%q %q %q}",
+				i, got[i].Op, got[i].Path, got[i].Text, want.op, want.path, want.text)
+		}
+		if got[i].DeltaIndex != int64(i+1) {
+			t.Errorf("delta %d index = %d, want %d", i, got[i].DeltaIndex, i+1)
+		}
+	}
+}
+
+// TestDecodeInlineResponse covers a piece carrying inline content.
+func TestDecodeInlineResponse(t *testing.T) {
+	resp := &ectoproto.Response{
+		Piece: &ectoproto.ResponsePiece{
+			Piece: &ectoproto.ResponsePiece_InlineResponse{
+				InlineResponse: &ectoproto.InlineResponse{
+					InlineType: "code_block",
+					Content:    "fmt.Println()",
+				},
+			},
+		},
+	}
+	raw, _ := proto.Marshal(resp)
+	got, err := ectostream.DecodeResponse(buildFrameFromBody(raw))
+	if err != nil {
+		t.Fatalf("DecodeResponse: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != ectostream.KindInline {
+		t.Fatalf("delta = %+v, want one inline delta", got)
+	}
+	if got[0].Path != "code_block" || got[0].Text != "fmt.Println()" {
+		t.Fatalf("delta = %+v", got[0])
+	}
+}
+
+// TestDecodeEventResponse covers a named stream event.
+func TestDecodeEventResponse(t *testing.T) {
+	resp := &ectoproto.Response{
+		Piece: &ectoproto.ResponsePiece{
+			Piece: &ectoproto.ResponsePiece_EventResponse{
+				EventResponse: &ectoproto.EventResponse{
+					Event: "search_started",
+					Value: "weather",
+				},
+			},
+		},
+	}
+	raw, _ := proto.Marshal(resp)
+	got, err := ectostream.DecodeResponse(buildFrameFromBody(raw))
+	if err != nil {
+		t.Fatalf("DecodeResponse: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != ectostream.KindEvent {
+		t.Fatalf("delta = %+v, want one event delta", got)
+	}
+	if got[0].Path != "search_started" || got[0].Text != "weather" {
+		t.Fatalf("delta = %+v", got[0])
+	}
+}

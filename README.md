@@ -284,3 +284,27 @@ internal/updater   OTA check and fail-closed self-replace
 internal/version   the ldflags version variable
 reference          the capture analysis every protocol decision came from
 ```
+
+## Decoding a captured reply
+
+`cmd/dgwdecode` reads captured DGW frames and prints what they carry, so a
+capture does not have to be sent anywhere to be understood.
+
+```bash
+go build -o dgwdecode ./cmd/dgwdecode
+
+# one frame, hex or base64
+echo "0d00007b0000..." | ./dgwdecode -v
+
+# a whole capture: the b64 column is picked out automatically
+./dgwdecode < dgw-frames.txt
+./dgwdecode -json < dgw-frames.txt
+```
+
+It prints one line per delta: `text` for answer chunks, `reasoning`, `delta` for
+JSON-patch edits (with `path` and `op`), `inline`, `event`, `progress`, `error`,
+`ack` and `done`. `-v` also prints the frame header and whether the body is JSON
+or protobuf.
+
+Which shape Meta uses for answer text has not been confirmed against a live
+reply, so the decoder accepts all four known carriers rather than guessing one.

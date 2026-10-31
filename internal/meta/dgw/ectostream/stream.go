@@ -13,10 +13,20 @@
 // is regenerated from that descriptor by a test), and one inbound message the
 // server actually sent (testdata/recorded-inbound-ack-frame.bin, an async ack).
 //
-// What is NOT verified: a live text/reasoning/deltas reply. Only the opening
-// acknowledgement was captured inbound, so answer text is exercised against
-// payloads built from the same generated types. Record a frame carrying
-// ModelResponse.raw_chunk to close that gap.
+// What is NOT verified: a live text reply. Only the opening acknowledgement was
+// ever captured inbound, so answer text is exercised against payloads built from
+// the same generated types. Because it is unknown which of the four shapes Meta
+// uses for answer text, the decoder accepts all of them:
+//
+//	ModelResponse.raw_chunk      incremental text (field 1)
+//	DeltasResponse.deltas        JSON-patch edits, surfaced with path and op
+//	InlineResponse.content       inline content, surfaced with its inline type
+//	EventResponse                named stream events
+//
+// A caller therefore sees text, delta, inline and event kinds rather than only
+// text, and must not treat KindDelta as plain appendable text: the path decides
+// what an edit applies to. Record a real reply frame to collapse this to the one
+// shape that is actually used.
 package ectostream
 
 import (
@@ -54,6 +64,16 @@ const (
 	KindError Kind = "error"
 	// KindDone marks the end of the answer.
 	KindDone Kind = "done"
+	// KindDelta is one entry of a DeltasResponse: a JSON-patch style edit
+	// addressed at Path. The path that carries answer text is not confirmed
+	// against a live reply, so Text is whatever Value that edit set.
+	KindDelta Kind = "delta"
+	// KindInline is inline content addressed by an inline_type.
+	KindInline Kind = "inline"
+	// KindEvent is a named stream event.
+	KindEvent Kind = "event"
+	// KindToolCall reports a tool being invoked mid-answer.
+	KindToolCall Kind = "tool_call"
 )
 
 // Delta is one decoded piece of a reply.
@@ -66,6 +86,13 @@ type Delta struct {
 	ResponseID string
 	// ErrorCode is set for KindError.
 	ErrorCode ectoproto.ErrorCode
+	// Path is the edit path (KindDelta), inline type (KindInline), event name
+	// (KindEvent) or tool name (KindToolCall). Empty otherwise.
+	Path string
+	// Op is the JSON-patch operation for KindDelta.
+	Op string
+	// DeltaIndex is the server-assigned order for KindDelta.
+	DeltaIndex int64
 	// Final is set when the stream signalled completion.
 	Final bool
 }
@@ -158,6 +185,39 @@ func deltasFor(resp *ectoproto.Response) []Delta {
 					out = append(out, Delta{Kind: KindProgress, Text: text, ResponseID: id})
 				}
 			}
+		case *ectoproto.ResponsePiece_Deltas:
+			// The newer streaming shape: a list of JSON-patch style edits
+			// addressed at a path. Which path carries answer text is not
+			// confirmed against a live reply, so the caller gets each edit with
+			// its path and decides; see Delta.Path.
+			for _, d := range v.Deltas.GetDeltas() {
+				out = append(out, Delta{
+					Kind:       KindDelta,
+					Text:       d.GetValue(),
+					Path:       d.GetPath(),
+					Op:         d.GetOp(),
+					DeltaIndex: d.GetDeltaIndex(),
+					ResponseID: id,
+				})
+			}
+		case *ectoproto.ResponsePiece_InlineResponse:
+			if t := v.InlineResponse.GetContent(); t != "" {
+				out = append(out, Delta{
+					Kind:       KindInline,
+					Text:       t,
+					Path:       v.InlineResponse.GetInlineType(),
+					ResponseID: id,
+				})
+			}
+		case *ectoproto.ResponsePiece_EventResponse:
+			if ev := v.EventResponse.GetEvent(); ev != "" {
+				out = append(out, Delta{
+					Kind:       KindEvent,
+					Text:       v.EventResponse.GetValue(),
+					Path:       ev,
+					ResponseID: id,
+				})
+			}
 		case *ectoproto.ResponsePiece_UserMessageAck:
 			out = append(out, Delta{Kind: KindAck, ResponseID: id})
 		case *ectoproto.ResponsePiece_AsyncAck:
@@ -169,6 +229,21 @@ func deltasFor(resp *ectoproto.Response) []Delta {
 				ErrorCode:  v.Error.GetErrorCode(),
 				ResponseID: id,
 			})
+		}
+	}
+
+	// ModelResponse also carries tool events; surface their names so a caller is
+	// not blind to a tool being invoked mid-answer.
+	if piece := resp.GetPiece(); piece != nil {
+		if mr, ok := piece.GetPiece().(*ectoproto.ResponsePiece_ModelResponse); ok {
+			for _, tc := range mr.ModelResponse.GetToolCallEvents() {
+				out = append(out, Delta{
+					Kind:       KindToolCall,
+					Text:       tc.GetRawOutputJson(),
+					Path:       tc.GetToolName(),
+					ResponseID: id,
+				})
+			}
 		}
 	}
 
