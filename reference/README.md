@@ -122,6 +122,21 @@ is why the ack decoded correctly). Not yet verified: a live text reply. Only the
 opening ack was captured inbound, so answer text is still exercised against
 payloads built from the generated types.
 
+## 2c. Recording new frames
+
+`capture/capture-dgw-ws.user.js` is a Tampermonkey userscript that records every
+websocket frame in both directions. It hooks `WebSocket.prototype.send`,
+`addEventListener('message')` and the `onmessage` setter, because the page may use
+any of them; a message delivered through two paths is logged once.
+
+Install it, open meta.ai, chat, then run `__dgwDump()` in the console. It writes a
+tab-separated file (`direction type typeName declared_len byte_len at b64`) you can
+read with a few lines of Python. `__dgwInbound()` prints a table of received
+frames first, which is enough to tell whether the reply text was captured before
+saving anything.
+
+This is how the recorded frames under `internal/meta/dgw/testdata` were obtained.
+
 ## 3. Why there is no hand-written codec
 
 The bundle calls `__DgwCodecEncodeStreamGroup_Data`, `__DgwCodecDecode`,
