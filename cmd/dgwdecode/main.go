@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -75,6 +76,15 @@ func run(args []string) error {
 
 		deltas, err := ectostream.DecodeResponse(raw)
 		if err != nil {
+			// A control frame carrying JSON ({code:200}, stream headers) is not
+			// a Response. That is expected, not a decode failure, so it is only
+			// noise when -v asked for headers.
+			if errors.Is(err, ectostream.ErrNotResponse) {
+				if *verbose {
+					fmt.Fprintf(os.Stderr, "line %d: no response payload (%v)\n", lineNo, err)
+				}
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "line %d: %v\n", lineNo, err)
 			continue
 		}
