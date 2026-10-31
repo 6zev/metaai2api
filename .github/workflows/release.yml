@@ -1,0 +1,143 @@
+name: release
+
+# Builds the binaries and publishes them as a GitHub Release.
+#
+# Triggered by pushing a semver tag (v1.2.3). Everything runs from the tagged
+# commit, so a release can always be traced back to source.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for a manual build (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify
+        run: |
+          go build ./...
+          go vet ./...
+          test -z "$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
+          go test ./... -race -count=1
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME}"
+          fi
+          # Reject anything that is not a plain version: the value is injected
+          # into a linker flag and used as an asset name.
+          if ! printf '%s' "$V" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "version '$V' is not semver" >&2
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "bare=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ steps.ver.outputs.version }}
+          BARE: ${{ steps.ver.outputs.bare }}
+        run: |
+          set -euo pipefail
+          # -trimpath and -s -w: the binary must not embed build-host paths, and
+          # it is downloaded by an updater that verifies a checksum, so size
+          # matters more than symbols.
+          LDFLAGS="-s -w -X github.com/me/metaai2api/internal/version.Version=${VERSION}"
+          EXT=""
+          [ "$GOOS" = "windows" ] && EXT=".exe"
+
+          # The main binary is named to match the updater's default
+          # asset_pattern "metaai2api-{os}-{arch}", so a self-update finds it.
+          go build -trimpath -ldflags "$LDFLAGS" \
+            -o "dist/metaai2api-${GOOS}-${GOARCH}${EXT}" ./cmd/metaai2api
+          # Helper tools use underscores so they are never mistaken for the
+          # asset the updater should replace itself with.
+          go build -trimpath -ldflags "$LDFLAGS" \
+            -o "dist/dgwsend_${GOOS}_${GOARCH}${EXT}" ./cmd/dgwsend
+          go build -trimpath -ldflags "$LDFLAGS" \
+            -o "dist/dgwdecode_${GOOS}_${GOARCH}${EXT}" ./cmd/dgwdecode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          # The updater reads checksums.txt and refuses to install anything that
+          # is not listed with a matching hash.
+          sha256sum ./* > checksums.txt
+          cat checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*
+          fail_on_unmatched_files: true

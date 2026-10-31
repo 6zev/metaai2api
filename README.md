@@ -308,3 +308,22 @@ or protobuf.
 
 Which shape Meta uses for answer text has not been confirmed against a live
 reply, so the decoder accepts all four known carriers rather than guessing one.
+
+## Building and releasing
+
+Binaries are published by `.github/workflows/release.yml` on a semver tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow verifies the tree (build, vet, gofmt, `go test -race`) before it
+builds, then publishes `metaai2api-<os>-<arch>` for linux/darwin/windows, plus
+`dgwsend` and `dgwdecode`, and a `checksums.txt`.
+
+The main binary is named `metaai2api-<os>-<arch>` because that is the updater's
+default `asset_pattern`; the helper tools use underscores so they are never
+mistaken for the asset the updater replaces itself with. A release without
+`checksums.txt` is refused by the updater on purpose — it fails closed rather
+than installing an unverified binary.
