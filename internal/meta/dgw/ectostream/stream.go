@@ -8,14 +8,15 @@
 //	                  -> clippy.ecto.Response         (ectoproto, from the descriptor)
 //	                  -> Delta                        (this package)
 //
-// What is verified: the frame layer against two recorded frames, and the
-// protobuf schema against the descriptor shipped in the client bundle (the
-// generated code is regenerated from that descriptor by a test).
+// What is verified: the frame layer against four recorded frames, the protobuf
+// schema against the descriptor shipped in the client bundle (the generated code
+// is regenerated from that descriptor by a test), and one inbound message the
+// server actually sent (testdata/recorded-inbound-ack-frame.bin, an async ack).
 //
-// What is NOT verified: a Response has not been decoded from a live server in
-// this repository. The gateway sends protobuf, the recorder captured only
-// outbound frames, so the inbound path is exercised against synthetic payloads
-// built from the same generated types. Record an inbound frame to close that gap.
+// What is NOT verified: a live text/reasoning/deltas reply. Only the opening
+// acknowledgement was captured inbound, so answer text is exercised against
+// payloads built from the same generated types. Record a frame carrying
+// ModelResponse.raw_chunk to close that gap.
 package ectostream
 
 import (

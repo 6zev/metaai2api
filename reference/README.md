@@ -113,9 +113,14 @@ generated code is pinned by `ectoproto/schema_test.go`, because a wrong field
 number decodes silently into the wrong field.
 
 `internal/meta/dgw/ectostream` decodes a websocket message into text, reasoning,
-progress, error and completion deltas. Verified end-to-end on a recorded frame
-(frame → envelope → protobuf), but **not** against a live server reply: only
-outbound frames were recorded.
+progress, error and completion deltas.
+
+Verified end-to-end on recorded frames, including one the **server** sent
+(`recorded-inbound-ack-frame.bin`): a `Response` whose `piece` is
+`ResponsePiece.async_ack` (field 16 — the number the generated code pins, which
+is why the ack decoded correctly). Not yet verified: a live text reply. Only the
+opening ack was captured inbound, so answer text is still exercised against
+payloads built from the generated types.
 
 ## 3. Why there is no hand-written codec
 

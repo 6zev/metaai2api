@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/me/metaai2api/internal/meta/dgw/ectoproto"
@@ -195,5 +196,37 @@ func TestDecodeRawProtobufBody(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Text != "direct" {
 		t.Fatalf("delta = %+v, want text \"direct\"", got)
+	}
+}
+
+// TestDecodeRealInboundAckFrame is the only test that decodes a message the
+// SERVER actually sent. It closes the gap the package doc mentions: the inbound
+// path used to be exercised only against payloads built from our own generated
+// types.
+//
+// The frame is a Response carrying ResponsePiece.async_ack {accepted: true,
+// request_id}, sent right after the client's prompt.
+func TestDecodeRealInboundAckFrame(t *testing.T) {
+	raw, err := os.ReadFile("../testdata/recorded-inbound-ack-frame.bin")
+	if err != nil {
+		t.Fatalf("read recorded frame: %v", err)
+	}
+
+	got, err := ectostream.DecodeResponse(raw)
+	if err != nil {
+		t.Fatalf("DecodeResponse: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d deltas, want 1: %+v", len(got), got)
+	}
+	if got[0].Kind != ectostream.KindAck {
+		t.Fatalf("kind = %q, want %q", got[0].Kind, ectostream.KindAck)
+	}
+	// The response id must come from the wire, not from a default.
+	if got[0].ResponseID != "7996a4a1-1825-45cd-9414-51643bb1cf8a" {
+		t.Fatalf("response id = %q", got[0].ResponseID)
+	}
+	if got[0].Final {
+		t.Fatal("an ack is not the end of the stream")
 	}
 }
