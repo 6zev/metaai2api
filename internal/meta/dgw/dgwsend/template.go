@@ -106,41 +106,12 @@ func ParseTemplate(raw []byte) (*PromptTemplate, error) {
 // prompt is the user text, conversationID the thread it belongs to, and requestID
 // the correlation id echoed in the frame envelope. All three must be valid; an
 // empty value is refused rather than sent.
+//
+// Lengths are recomputed, so the prompt may be any length. An earlier version
+// spliced bytes in place and worked only when the replacement happened to be the
+// same size as the original.
 func (t *PromptTemplate) Build(prompt, conversationID, requestID string) ([]byte, error) {
-	if prompt == "" {
-		return nil, errors.New("dgwsend: prompt is empty")
-	}
-	if conversationID == "" || requestID == "" {
-		return nil, errors.New("dgwsend: conversation id and request id are required")
-	}
-
-	// Replace from the end so earlier offsets stay valid.
-	type edit struct {
-		span span
-		val  string
-	}
-	edits := []edit{
-		{t.requestIDSpan, requestID},
-		{t.conversationSpan, conversationID},
-		{t.textSpan, prompt},
-	}
-	// Highest offset first.
-	for i := 1; i < len(edits); i++ {
-		for j := i; j > 0 && edits[j].span.off > edits[j-1].span.off; j-- {
-			edits[j], edits[j-1] = edits[j-1], edits[j]
-		}
-	}
-
-	out := append([]byte(nil), t.raw...)
-	for _, e := range edits {
-		before := out[:e.span.off]
-		after := out[e.span.off+e.span.len:]
-		out = make([]byte, 0, len(before)+len(e.val)+len(after))
-		out = append(out, before...)
-		out = append(out, e.val...)
-		out = append(out, after...)
-	}
-	return out, nil
+	return buildPrompt(t.raw, prompt, conversationID, requestID)
 }
 
 // NewRequestID returns a random UUID-shaped id.
@@ -182,12 +153,25 @@ func fieldBytesAt(b []byte, num protowire.Number, base int) ([]byte, span, error
 			off += tagLen + l
 			continue
 		}
-		l := protowire.ConsumeFieldValue(n, typ, b[tagLen:])
-		if l < 0 {
+		// Any other wire type is copied past, not treated as an error: the
+		// recorded request contains fixed-width fields (the dpr float inside
+		// field 19) and skipping them must not fail the lookup.
+		var adv int
+		switch typ {
+		case protowire.VarintType:
+			_, adv = protowire.ConsumeVarint(b[tagLen:])
+		case protowire.Fixed32Type:
+			adv = 4
+		case protowire.Fixed64Type:
+			adv = 8
+		default:
 			return nil, span{}, ErrBadTemplate
 		}
-		b = b[tagLen+l:]
-		off += tagLen + l
+		if adv <= 0 || tagLen+adv > len(b) {
+			return nil, span{}, ErrBadTemplate
+		}
+		b = b[tagLen+adv:]
+		off += tagLen + adv
 	}
 	return nil, span{}, ErrBadTemplate
 }

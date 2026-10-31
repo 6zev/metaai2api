@@ -129,62 +129,37 @@ A "full" message **replaces** the answer; the server sends one at seq 0 and agai
 at the end with the complete text, so a naive append duplicates the whole answer.
 This is verified against a real reply (`testdata/recorded-reply-frames.txt`).
 
-**Sending works only at the recorded prompt length.** `cmd/dgwsend` builds and
-sends a prompt frame. The gateway accepts it, answers `{"code":200}`, streams the
-reply and closes — but only when the prompt text is the same length as the one in
-the template.
+**Sending works at any prompt length.** `cmd/dgwsend` builds and sends a prompt
+frame, establishes the stream, answers pings and acks, and prints the reply.
+Verified with prompts from 1 byte to 30 bytes of Vietnamese with emoji.
 
-Measured:
+An earlier conclusion in this file — that only the template's length worked and
+that an integrity hash was responsible — was wrong, and the wrong answer was
+convincing:
 
 | prompt | length | reply |
 |---|---|---|
 | `hiiii`, `zzzzz`, `12345` | 5 | yes |
 | `hello!`, `helloo` | 6 | no |
-| `hello!!` | 7 | no |
-| any, with the embedded hash zeroed | 5 | no |
 
-So the hash is checked, but it does not depend on the prompt text — three
-different 5-byte prompts all succeed against the hash recorded for `hello`. What
-it covers is still unidentified: it is not SHA-1/256/MD5 of the text, of the
-message, or of the message with the hash zeroed, and it is not a hash of any
-single metadata field.
+That looked like a length-dependent integrity check. The real cause was a bug in
+this repository: the builder spliced the new prompt bytes in place and never
+recomputed the length prefix of the enclosing messages, so any length change left
+them one byte short, the server's protobuf parser read past the field, and the
+frame was dropped. A same-length prompt is the only case where the stale prefixes
+happen to remain correct, which is exactly what the table shows.
 
-The field itself, `RequestMetadata` field 19, is not in the shipped descriptor:
-the descriptor predates it. On the wire it is `{field 1: 64-char hex, field 2:
-float32 dpr}` — the float is the `dpr` cookie (2.45), so the field carries a
-client-fingerprint hash next to the device pixel ratio.
+`rebuild.go` now re-emits every enclosing length, and
+`TestBuiltPromptIsStructurallyValid` walks the whole message at seven prompt
+lengths including multi-byte UTF-8.
 
-Getting arbitrary lengths working needs the hash algorithm, which is not in the
-bundle as a plain digest call over the prompt. Until then, a caller either matches
-the template length or accepts that the reply never arrives.
-
-Verified end-to-end on recorded frames, including one the **server** sent
-(`recorded-inbound-ack-frame.bin`): a `Response` whose `piece` is
-`ResponsePiece.async_ack` (field 16 — the number the generated code pins, which
-is why the ack decoded correctly). Not yet verified: a live text reply. Only the
-opening ack was captured inbound, so answer text is still exercised against
-payloads built from the generated types.
-
-## 2c. Recording new frames
-
-`capture/capture-dgw-ws.user.js` is a Tampermonkey userscript that records every
-websocket frame in both directions. It hooks `WebSocket.prototype.send`,
-`addEventListener('message')` and the `onmessage` setter, because the page may use
-any of them; a message delivered through two paths is logged once.
-
-Frames are kept in `sessionStorage`, so a reload mid-capture (sending a message
-navigates to `/prompt/<id>`) does not lose what was already recorded; run
-`__dgwReset()` to start over. `__dgwCheck()` reports the three counts that say
-whether a capture is complete: outbound Data (the prompt was sent), inbound Data
-(the reply arrived) and inbound EndOfData (the reply finished).
-
-Install it, open meta.ai, chat, then run `__dgwDump()` in the console. It writes a
-tab-separated file (`direction type typeName declared_len byte_len at b64`) you can
-read with a few lines of Python. `__dgwInbound()` prints a table of received
-frames first, which is enough to tell whether the reply text was captured before
-saving anything.
-
-This is how the recorded frames under `internal/meta/dgw/testdata` were obtained.
+**The hash is not prompt-dependent.** Field 19 at `1.1.19` is
+`{64-char hex, float32}` where the float is the `dpr` cookie (2.45). It is
+identical across two captures taken minutes apart, and three different 5-byte
+prompts were all accepted against the same value, so it is a stable
+client-fingerprint block copied through untouched — not a digest of the prompt.
+Zeroing it does stop the reply, so it is checked; that is a property of the
+fingerprint, not of the prompt.
 
 ## 3. Why there is no hand-written codec
 
