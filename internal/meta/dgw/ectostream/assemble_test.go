@@ -146,3 +146,67 @@ func TestAssemblerBadOperationKeepsAnswer(t *testing.T) {
 		t.Fatal("the failed operation should be reported")
 	}
 }
+
+// The image shape below is from a live generation: a GenAIImagePrimitive
+// section carrying a signed CDN url, which is what a caller needs to show or
+// download the picture.
+const fullImage = `{"seq":80,"type":"full","response":{"response_id":"r1",
+ "sections":[
+  {"view_model":{"__typename":"GenAISingleLayoutViewModel",
+   "primitive":{"__typename":"GenAIMarkdownTextUXPrimitive","text":"Đây nè:"}}},
+  {"view_model":{"__typename":"GenAISingleLayoutViewModel",
+   "primitive":{"__typename":"GenAIImagePrimitive",
+    "preview_image":{"url":"https://cdn/preview.webp","mime_type":"image/webp",
+                     "width":1920,"height":1280},
+    "full_image":{"url":"https://cdn/full.webp","mime_type":"image/webp",
+                  "width":1920,"height":1280},
+    "source":{"source_type":"IMAGE_GEN",
+              "source_display_name":"gallery/image_20261031_144644.webp"},
+    "image_type":"DEFAULT"}}}]}}`
+
+// TestAssemblerExtractsGeneratedImage covers the case that matters for image
+// generation: the asset is a url inside a GenAIImagePrimitive section, not text.
+func TestAssemblerExtractsGeneratedImage(t *testing.T) {
+	a := ectostream.NewAssembler()
+	if err := a.Apply(fullImage); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	media := a.Media()
+	if len(media) != 1 {
+		t.Fatalf("media = %d, want 1: %+v", len(media), media)
+	}
+	m := media[0]
+	if m.URL != "https://cdn/full.webp" {
+		t.Errorf("url = %q, want the full-size asset", m.URL)
+	}
+	if m.PreviewURL != "https://cdn/preview.webp" {
+		t.Errorf("preview = %q", m.PreviewURL)
+	}
+	if m.Width != 1920 || m.Height != 1280 {
+		t.Errorf("dimensions = %dx%d", m.Width, m.Height)
+	}
+	if m.MimeType != "image/webp" {
+		t.Errorf("mime = %q", m.MimeType)
+	}
+	if m.Source != "gallery/image_20261031_144644.webp" {
+		t.Errorf("source = %q", m.Source)
+	}
+
+	// The image section must not leak into the prose.
+	if got := a.AnswerText(); strings.Contains(got, "cdn/") {
+		t.Fatalf("image url leaked into the answer text: %q", got)
+	}
+}
+
+// TestAssemblerNoMediaForPlainText keeps a text reply from reporting phantom
+// media.
+func TestAssemblerNoMediaForPlainText(t *testing.T) {
+	a := ectostream.NewAssembler()
+	if err := a.Apply(fullAnswer); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := a.Media(); len(got) != 0 {
+		t.Fatalf("text reply reported %d media items", len(got))
+	}
+}

@@ -30,26 +30,14 @@ type UnifiedFrame struct {
 }
 
 // UnifiedResponse is the full-response payload.
+//
+// Sections are kept as raw JSON rather than typed structs on purpose: a typed
+// struct silently drops every field it does not name, and the first version of
+// this file named only __typename and text, which deleted the entire image block
+// from a generated-image reply.
 type UnifiedResponse struct {
-	ResponseID string           `json:"response_id"`
-	Sections   []UnifiedSection `json:"sections"`
-}
-
-// UnifiedSection holds one view model in the rendered answer.
-type UnifiedSection struct {
-	ViewModel UnifiedViewModel `json:"view_model"`
-}
-
-// UnifiedViewModel is the rendered primitive for a section.
-type UnifiedViewModel struct {
-	TypeName  string           `json:"__typename"`
-	Primitive UnifiedPrimitive `json:"primitive"`
-}
-
-// UnifiedPrimitive carries the text or media of one section.
-type UnifiedPrimitive struct {
-	TypeName string `json:"__typename"`
-	Text     string `json:"text"`
+	ResponseID string            `json:"response_id"`
+	Sections   []json.RawMessage `json:"sections"`
 }
 
 // UnifiedOperation is one JSON-pointer edit.
@@ -92,14 +80,22 @@ func DecodeUnified(raw string, responseID string) ([]Delta, error) {
 		// server sends one at seq 0 and again at the end, the second carrying the
 		// complete text. Treating it as an append duplicates the whole answer,
 		// so it is marked Replace and the caller must reset its buffer.
-		for i, sec := range uf.Response.Sections {
-			prim := sec.ViewModel.Primitive
-			if prim.Text == "" {
+		for i, raw := range uf.Response.Sections {
+			var sec map[string]any
+			if err := json.Unmarshal(raw, &sec); err != nil {
+				continue
+			}
+			prim := primitiveOf(sec)
+			if prim == nil {
+				continue
+			}
+			text, _ := prim["text"].(string)
+			if text == "" {
 				continue
 			}
 			out = append(out, Delta{
 				Kind:       KindText,
-				Text:       prim.Text,
+				Text:       text,
 				ResponseID: id,
 				Path:       sectionPath(i),
 				Op:         "full",

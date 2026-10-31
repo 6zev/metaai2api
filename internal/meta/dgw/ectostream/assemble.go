@@ -287,6 +287,110 @@ func (a *Assembler) ProgressText() string {
 	return strings.Join(out, "\n")
 }
 
+// Media returns every generated image or video in the reply, in section order.
+//
+// A generated image arrives as a GenAIImagePrimitive section:
+//
+//	{"__typename":"GenAIImagePrimitive",
+//	 "preview_image":{"url":"https://scontent...webp","mime_type":"image/webp",
+//	                  "width":1920,"height":1280},
+//	 "full_image":{...same shape...},
+//	 "source":{"source_type":"IMAGE_GEN","source_display_name":"gallery/image_....webp"},
+//	 "image_type":"DEFAULT"}
+//
+// The url is a signed CDN link, so it carries its own expiry and must not be
+// cached indefinitely. This is verified against a live generation.
+func (a *Assembler) Media() []MediaItem {
+	var out []MediaItem
+	for _, sec := range a.Sections() {
+		prim := primitiveOf(sec)
+		if prim == nil {
+			continue
+		}
+		tn, _ := prim["__typename"].(string)
+		if !strings.Contains(tn, "Image") && !strings.Contains(tn, "Video") {
+			continue
+		}
+		if m, ok := mediaFrom(prim); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// MediaItem is one generated image or video.
+type MediaItem struct {
+	// URL is the full-size asset.
+	URL string
+	// PreviewURL is the smaller rendition, when the server sent a different one.
+	PreviewURL string
+	// MimeType, Width and Height describe the asset.
+	MimeType string
+	Width    int
+	Height   int
+	// Source names where the asset sits in the user's gallery.
+	Source string
+	// MediaID is the server-side identifier, when present.
+	MediaID string
+}
+
+func mediaFrom(prim map[string]any) (MediaItem, bool) {
+	full, _ := prim["full_image"].(map[string]any)
+	if full == nil {
+		full, _ = prim["full_video"].(map[string]any)
+	}
+	preview, _ := prim["preview_image"].(map[string]any)
+	if preview == nil {
+		preview, _ = prim["preview_video"].(map[string]any)
+	}
+	if full == nil && preview == nil {
+		return MediaItem{}, false
+	}
+
+	src, _ := prim["source"].(map[string]any)
+	item := MediaItem{
+		Source: str(src["source_display_name"]),
+	}
+	if full != nil {
+		item.URL = str(full["url"])
+		item.MimeType = str(full["mime_type"])
+		item.MediaID = str(full["media_id"])
+		item.Width = intOf(full["width"])
+		item.Height = intOf(full["height"])
+	}
+	if preview != nil {
+		item.PreviewURL = str(preview["url"])
+		if item.URL == "" {
+			item.URL = item.PreviewURL
+		}
+		if item.MimeType == "" {
+			item.MimeType = str(preview["mime_type"])
+		}
+		if item.MediaID == "" {
+			item.MediaID = str(preview["media_id"])
+		}
+		if item.Width == 0 {
+			item.Width = intOf(preview["width"])
+			item.Height = intOf(preview["height"])
+		}
+	}
+	return item, item.URL != ""
+}
+
+// intOf reads a JSON number that may have arrived as float64 or json.Number.
+func intOf(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	}
+	return 0
+}
+
 // Citations returns every inline entity carrying a url, in section order.
 func (a *Assembler) Citations() []Citation {
 	var out []Citation

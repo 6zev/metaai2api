@@ -193,6 +193,23 @@ func printReply(asm *ectostream.Assembler, chunks string) {
 	if p := asm.ProgressText(); p != "" {
 		fmt.Printf("\n--- progress ---\n%s\n", p)
 	}
+	if media := asm.Media(); len(media) > 0 {
+		fmt.Printf("\n--- media (%d) ---\n", len(media))
+		for i, m := range media {
+			dims := ""
+			if m.Width > 0 {
+				dims = fmt.Sprintf(" %dx%d", m.Width, m.Height)
+			}
+			fmt.Printf("%d. %s%s\n   %s\n", i+1, m.MimeType, dims, m.URL)
+			if m.PreviewURL != "" && m.PreviewURL != m.URL {
+				fmt.Printf("   preview: %s\n", m.PreviewURL)
+			}
+			if m.Source != "" {
+				fmt.Printf("   source:  %s\n", m.Source)
+			}
+		}
+	}
+
 	if cites := asm.Citations(); len(cites) > 0 {
 		fmt.Printf("\n--- sources (%d) ---\n", len(cites))
 		for i, c := range cites {
