@@ -327,3 +327,45 @@ default `asset_pattern`; the helper tools use underscores so they are never
 mistaken for the asset the updater replaces itself with. A release without
 `checksums.txt` is refused by the updater on purpose — it fails closed rather
 than installing an unverified binary.
+
+## Configuration file (`.env`)
+
+A `.env` in the working directory is read on start, so a container or a systemd
+unit needs no exported variables:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+./metaai2api -config config.yaml
+```
+
+A variable already exported in the real environment **wins** over the file. That
+order is deliberate: a platform-injected secret is never silently replaced by a
+stray `.env`. Point elsewhere with `META_DOT_ENV=/path/to/.env`, or disable it
+with `META_DOT_ENV=`.
+
+Supported syntax: `KEY=value`, `KEY="quoted"`, `KEY='literal'`, an optional
+`export` prefix, and full-line `#` comments. A `#` inside a value is part of that
+value, because a cookie or token can contain one.
+
+### The access token is not derived from the cookie
+
+`META_COOKIE` and `META_ACCESS_TOKEN` are separate secrets and both are needed
+for the experimental backend. Two sessions were compared: the cookie rotated
+between them while the token stayed byte-identical, so the token cannot be
+regenerated from the cookie — there is no "make a token from the cookie" step to
+add.
+
+The token is long-lived (it survived more than a day and many requests here) but
+it can be revoked. When it is, the gateway completes the websocket handshake and
+then closes with `Unauthorized 401`, which `dgwsend` now reports as:
+
+```
+access token rejected by the gateway (Unauthorized 401): META_ACCESS_TOKEN is
+expired or revoked — take a fresh one from the wss://gateway.meta.ai/ws request,
+or copy the accessToken embedded in the meta.ai page HTML
+```
+
+To refresh it, copy the `accessToken` field out of the meta.ai page HTML (search
+for `accessToken":"ecto1:`) or the `Authorization=` parameter on the
+`wss://gateway.meta.ai/ws` request.

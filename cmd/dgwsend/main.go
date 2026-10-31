@@ -20,11 +20,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -127,7 +129,7 @@ func run() error {
 				printReply(asm, join(text))
 				return nil
 			}
-			return fmt.Errorf("read: %w", err)
+			return explainReadError(err)
 		}
 
 		if *raw {
@@ -219,6 +221,31 @@ func printReply(asm *ectostream.Assembler, chunks string) {
 			fmt.Printf("%d. %s\n   %s\n", i+1, c.Title, c.URL)
 		}
 	}
+}
+
+// explainReadError turns the websocket failures an operator actually hits into
+// something actionable.
+//
+// An expired or revoked access token does not produce an HTTP 401: the gateway
+// completes the handshake, then closes with frame type 8 carrying
+// "Unauthorized 401". ReadMessage reports that as a close error, and a caller
+// that only prints it spends time looking for a network fault.
+func explainReadError(err error) error {
+	var ce *websocket.CloseError
+	if errors.As(err, &ce) {
+		if strings.Contains(ce.Text, "Unauthorized") || ce.Code == websocket.ClosePolicyViolation {
+			return fmt.Errorf("access token rejected by the gateway (%s): "+
+				"META_ACCESS_TOKEN is expired or revoked — take a fresh one from "+
+				"the wss://gateway.meta.ai/ws request, or copy the accessToken "+
+				"embedded in the meta.ai page HTML: %w", ce.Text, err)
+		}
+		return fmt.Errorf("gateway closed the connection (code %d, %q): %w", ce.Code, ce.Text, err)
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return fmt.Errorf("no reply within the timeout; the token may be valid but the "+
+			"stream never produced an answer: %w", err)
+	}
+	return fmt.Errorf("read: %w", err)
 }
 
 func convIDOrTemplate(id string, tpl *dgwsend.PromptTemplate) string {

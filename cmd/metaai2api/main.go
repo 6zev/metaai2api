@@ -57,6 +57,10 @@ const procSelfExe = "/proc/self/exe"
 // a container; see updateTarget.
 const targetEnv = "META_UPDATE_TARGET"
 
+// defaultDotEnv is the .env file read on start, relative to the working
+// directory. Set META_DOT_ENV to point elsewhere, or to "" to skip it.
+const defaultDotEnv = ".env"
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
@@ -64,6 +68,15 @@ func main() {
 	if wantsHelp(args) {
 		usage(os.Stdout)
 		return
+	}
+
+	// A .env next to the working directory is the first thing an operator
+	// reaches for. Loaded before the YAML so its values are available to
+	// config.Load; a value already exported in the environment wins, so a
+	// platform-injected secret is never overridden by a stray file.
+	if err := loadDotEnv(defaultDotEnv); err != nil {
+		slog.Error("load .env", slog.String("path", defaultDotEnv), slog.String("error", err.Error()))
+		os.Exit(2)
 	}
 	cfg, err := loadConfig(path, args)
 	if err != nil {
@@ -504,4 +517,15 @@ func serve(ctx context.Context, cfg config.Config, storePath string) error {
 // run is serve against the default store path; tests drive serve directly.
 func run(ctx context.Context, cfg config.Config) error {
 	return serve(ctx, cfg, "")
+}
+
+// loadDotEnv reads path when META_DOT_ENV does not name a different one.
+func loadDotEnv(path string) error {
+	if override, ok := os.LookupEnv("META_DOT_ENV"); ok {
+		if override == "" {
+			return nil // explicitly disabled
+		}
+		path = override
+	}
+	return config.LoadDotEnv(path)
 }
