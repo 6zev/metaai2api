@@ -115,6 +115,28 @@ number decodes silently into the wrong field.
 `internal/meta/dgw/ectostream` decodes a websocket message into text, reasoning,
 progress, error and completion deltas.
 
+**Answer text is JSON inside protobuf.** `ModelResponse.raw_unified_response`
+(field 10) carries a JSON document, not text:
+
+```json
+{"seq":0,"type":"full","response":{"sections":[{"view_model":{"primitive":
+  {"__typename":"GenAIMarkdownTextUXPrimitive","text":"hiiiiii back"}}}]}}
+{"seq":1,"type":"patch","operations":[{"op":"delta",
+  "path":"/sections/0/view_model/primitive/text","value":"!"}]}
+```
+
+A "full" message **replaces** the answer; the server sends one at seq 0 and again
+at the end with the complete text, so a naive append duplicates the whole answer.
+This is verified against a real reply (`testdata/recorded-reply-frames.txt`).
+
+**Sending works only at the recorded prompt length.** `cmd/dgwsend` builds and
+sends a prompt frame. The gateway accepts it, answers `{"code":200}`, streams the
+reply and closes — but only when the prompt text is the same length as the one in
+the template. A prompt of a different length is accepted and then the stream
+closes with no reply, which is consistent with an integrity value inside the
+prompt protobuf covering its body. Verified by sending `hiiii` against a template
+recorded from `hello`, both 5 bytes.
+
 Verified end-to-end on recorded frames, including one the **server** sent
 (`recorded-inbound-ack-frame.bin`): a `Response` whose `piece` is
 `ResponsePiece.async_ack` (field 16 — the number the generated code pins, which

@@ -13,20 +13,23 @@
 // is regenerated from that descriptor by a test), and one inbound message the
 // server actually sent (testdata/recorded-inbound-ack-frame.bin, an async ack).
 //
-// What is NOT verified: a live text reply. Only the opening acknowledgement was
-// ever captured inbound, so answer text is exercised against payloads built from
-// the same generated types. Because it is unknown which of the four shapes Meta
-// uses for answer text, the decoder accepts all of them:
+// Answer text arrives as JSON in ModelResponse.raw_unified_response, as a "full"
+// snapshot followed by "patch" deltas at a JSON pointer (see unified.go). That is
+// verified against a real reply: testdata/recorded-reply-frames.txt holds every
+// frame a live server sent for one prompt, and TestRealReplyProducesAnswerText
+// reassembles the answer from them.
 //
-//	ModelResponse.raw_chunk      incremental text (field 1)
-//	DeltasResponse.deltas        JSON-patch edits, surfaced with path and op
-//	InlineResponse.content       inline content, surfaced with its inline type
-//	EventResponse                named stream events
+// Two things a caller must get right, both learned from that recording:
 //
-// A caller therefore sees text, delta, inline and event kinds rather than only
-// text, and must not treat KindDelta as plain appendable text: the path decides
-// what an edit applies to. Record a real reply frame to collapse this to the one
-// shape that is actually used.
+//   - A "full" message REPLACES the answer. The server sends one at seq 0 and
+//     again at the end with the complete text; appending every text delta
+//     duplicates the whole answer. Delta.Replace marks it.
+//   - KindDelta is not answer text. A patch can edit citations or tool output;
+//     only the text pointer is promoted to KindText.
+//
+// The remaining carriers (raw_chunk, InlineResponse, EventResponse) are kept
+// because the schema offers them and another surface may use them, but the
+// recorded reply does not exercise them.
 package ectostream
 
 import (
@@ -93,6 +96,11 @@ type Delta struct {
 	Op string
 	// DeltaIndex is the server-assigned order for KindDelta.
 	DeltaIndex int64
+	// Replace says this delta replaces the answer accumulated so far rather than
+	// extending it. A "full" unified frame sets it; every "patch" delta does not.
+	// A caller that appends without honouring Replace produces a doubled answer,
+	// which is what the recorded reply does at its final frame.
+	Replace bool
 	// Final is set when the stream signalled completion.
 	Final bool
 }
@@ -162,9 +170,21 @@ func deltasFor(resp *ectoproto.Response) []Delta {
 	if piece := resp.GetPiece(); piece != nil {
 		switch v := piece.GetPiece().(type) {
 		case *ectoproto.ResponsePiece_ModelResponse:
-			// raw_chunk is the incremental text. pp_response_so_far is the
-			// whole answer so far, which a caller must not append blindly.
-			if t := v.ModelResponse.GetRawChunk(); t != "" {
+			// The answer actually arrives as JSON in raw_unified_response: a
+			// "full" snapshot followed by "patch" deltas. Decode that first;
+			// raw_chunk is the older protobuf-embedded path and is empty in the
+			// frames recorded from a live session.
+			if u := v.ModelResponse.GetRawUnifiedResponse(); u != "" {
+				ud, err := DecodeUnified(u, id)
+				if err != nil {
+					return append(out, Delta{
+						Kind:       KindError,
+						Text:       "undecodable unified response: " + err.Error(),
+						ResponseID: id,
+					})
+				}
+				out = append(out, ud...)
+			} else if t := v.ModelResponse.GetRawChunk(); t != "" {
 				out = append(out, Delta{Kind: KindText, Text: t, ResponseID: id})
 			}
 		case *ectoproto.ResponsePiece_ReasoningResponse:

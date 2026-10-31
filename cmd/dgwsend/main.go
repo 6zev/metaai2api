@@ -156,6 +156,12 @@ func run() error {
 		for _, d := range deltas {
 			fmt.Fprintf(os.Stderr, "  [%s] %s\n", d.Kind, preview(d.Text, 80))
 			if d.Kind == ectostream.KindText {
+				// A "full" frame replaces the answer; the server sends one at
+				// the end carrying the complete text, so appending every chunk
+				// would print the answer twice.
+				if d.Replace {
+					text = text[:0]
+				}
 				text = append(text, d.Text)
 			}
 			if d.Final {
