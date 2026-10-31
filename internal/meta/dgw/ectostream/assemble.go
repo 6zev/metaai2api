@@ -332,10 +332,20 @@ type MediaItem struct {
 	Source string
 	// MediaID is the server-side identifier, when present.
 	MediaID string
+	// DurationMs is set for video, in milliseconds.
+	DurationMs int
 }
 
 func mediaFrom(prim map[string]any) (MediaItem, bool) {
+	// Images use full_image / preview_image; videos use a single "video" key.
+	// Recorded shapes, not guesses:
+	//   GenAIImagePrimitive: full_image, preview_image, source
+	//   GenAIVideoPrimitive: video{url,mime_type,width,height,duration},
+	//                        filename, video_duration_ms
 	full, _ := prim["full_image"].(map[string]any)
+	if full == nil {
+		full, _ = prim["video"].(map[string]any)
+	}
 	if full == nil {
 		full, _ = prim["full_video"].(map[string]any)
 	}
@@ -349,7 +359,13 @@ func mediaFrom(prim map[string]any) (MediaItem, bool) {
 
 	src, _ := prim["source"].(map[string]any)
 	item := MediaItem{
-		Source: str(src["source_display_name"]),
+		Source: firstNonEmpty(str(src["source_display_name"]), str(prim["filename"])),
+	}
+	// Videos carry their length; images do not.
+	if d := intOf(full["duration"]); d > 0 {
+		item.DurationMs = d
+	} else {
+		item.DurationMs = intOf(prim["video_duration_ms"])
 	}
 	if full != nil {
 		item.URL = str(full["url"])

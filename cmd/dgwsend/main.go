@@ -200,6 +200,9 @@ func printReply(asm *ectostream.Assembler, chunks string) {
 			if m.Width > 0 {
 				dims = fmt.Sprintf(" %dx%d", m.Width, m.Height)
 			}
+			if m.DurationMs > 0 {
+				dims += fmt.Sprintf(" %ds", m.DurationMs/1000)
+			}
 			fmt.Printf("%d. %s%s\n   %s\n", i+1, m.MimeType, dims, m.URL)
 			if m.PreviewURL != "" && m.PreviewURL != m.URL {
 				fmt.Printf("   preview: %s\n", m.PreviewURL)

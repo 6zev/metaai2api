@@ -210,3 +210,44 @@ func TestAssemblerNoMediaForPlainText(t *testing.T) {
 		t.Fatalf("text reply reported %d media items", len(got))
 	}
 }
+
+// The video shape is different from the image's: one "video" key rather than
+// full_image/preview_image, plus a duration.
+const fullVideo = `{"seq":90,"type":"full","response":{"response_id":"r1",
+ "sections":[
+  {"view_model":{"__typename":"GenAISingleLayoutViewModel",
+   "primitive":{"__typename":"GenAIMarkdownTextUXPrimitive","text":"Here's your video:"}}},
+  {"view_model":{"__typename":"GenAISingleLayoutViewModel",
+   "primitive":{"__typename":"GenAIVideoPrimitive",
+    "filename":"image_20261031_145318.mp4",
+    "video":{"url":"https://cdn/clip.mp4","mime_type":"video/mp4",
+             "width":1280,"height":720,"duration":10000},
+    "video_duration_ms":10000}}}]}}`
+
+func TestAssemblerExtractsGeneratedVideo(t *testing.T) {
+	a := ectostream.NewAssembler()
+	if err := a.Apply(fullVideo); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	media := a.Media()
+	if len(media) != 1 {
+		t.Fatalf("media = %d, want 1: %+v", len(media), media)
+	}
+	m := media[0]
+	if m.URL != "https://cdn/clip.mp4" {
+		t.Errorf("url = %q", m.URL)
+	}
+	if m.MimeType != "video/mp4" {
+		t.Errorf("mime = %q", m.MimeType)
+	}
+	if m.DurationMs != 10000 {
+		t.Errorf("duration = %d, want 10000", m.DurationMs)
+	}
+	if m.Source != "image_20261031_145318.mp4" {
+		t.Errorf("source = %q", m.Source)
+	}
+	if m.Width != 1280 || m.Height != 720 {
+		t.Errorf("dims = %dx%d", m.Width, m.Height)
+	}
+}
