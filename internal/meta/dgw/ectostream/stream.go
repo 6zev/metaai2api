@@ -77,6 +77,9 @@ const (
 	KindEvent Kind = "event"
 	// KindToolCall reports a tool being invoked mid-answer.
 	KindToolCall Kind = "tool_call"
+	// KindUnified carries a raw raw_unified_response payload for a caller that
+	// assembles the stream itself (see Assembler). Text holds the JSON.
+	KindUnified Kind = "unified"
 )
 
 // Delta is one decoded piece of a reply.
@@ -175,6 +178,7 @@ func deltasFor(resp *ectoproto.Response) []Delta {
 			// raw_chunk is the older protobuf-embedded path and is empty in the
 			// frames recorded from a live session.
 			if u := v.ModelResponse.GetRawUnifiedResponse(); u != "" {
+				out = append(out, Delta{Kind: KindUnified, Text: u, ResponseID: id})
 				ud, err := DecodeUnified(u, id)
 				if err != nil {
 					return append(out, Delta{

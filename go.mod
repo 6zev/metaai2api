@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 )

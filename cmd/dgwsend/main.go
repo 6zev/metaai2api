@@ -118,12 +118,13 @@ func run() error {
 
 	deadline := time.Now().Add(*timeout)
 	_ = conn.SetReadDeadline(deadline)
+	asm := ectostream.NewAssembler()
 	var text []string
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			if len(text) > 0 {
-				fmt.Printf("\n--- reply text (%d chunks) ---\n%s\n", len(text), join(text))
+			if len(text) > 0 || asm.SawFull() {
+				printReply(asm, join(text))
 				return nil
 			}
 			return fmt.Errorf("read: %w", err)
@@ -155,6 +156,11 @@ func run() error {
 		}
 		for _, d := range deltas {
 			fmt.Fprintf(os.Stderr, "  [%s] %s\n", d.Kind, preview(d.Text, 80))
+			if d.Kind == ectostream.KindUnified {
+				if err := asm.Apply(d.Text); err != nil {
+					fmt.Fprintf(os.Stderr, "dgwsend: assemble: %v\n", err)
+				}
+			}
 			if d.Kind == ectostream.KindText {
 				// A "full" frame replaces the answer; the server sends one at
 				// the end carrying the complete text, so appending every chunk
@@ -165,9 +171,32 @@ func run() error {
 				text = append(text, d.Text)
 			}
 			if d.Final {
-				fmt.Printf("\n--- reply text (%d chunks) ---\n%s\n", len(text), join(text))
+				printReply(asm, join(text))
 				return nil
 			}
+		}
+	}
+}
+
+// printReply prefers the assembled document, which handles sections that are not
+// answer text, inline-entity markers and citations. The chunk join is the
+// fallback for a reply that carried no unified payload.
+func printReply(asm *ectostream.Assembler, chunks string) {
+	answer := chunks
+	if asm.SawFull() {
+		if a := asm.AnswerText(); a != "" {
+			answer = a
+		}
+	}
+	fmt.Printf("\n--- reply ---\n%s\n", answer)
+
+	if p := asm.ProgressText(); p != "" {
+		fmt.Printf("\n--- progress ---\n%s\n", p)
+	}
+	if cites := asm.Citations(); len(cites) > 0 {
+		fmt.Printf("\n--- sources (%d) ---\n", len(cites))
+		for i, c := range cites {
+			fmt.Printf("%d. %s\n   %s\n", i+1, c.Title, c.URL)
 		}
 	}
 }
