@@ -129,6 +129,12 @@ websocket frame in both directions. It hooks `WebSocket.prototype.send`,
 `addEventListener('message')` and the `onmessage` setter, because the page may use
 any of them; a message delivered through two paths is logged once.
 
+Frames are kept in `sessionStorage`, so a reload mid-capture (sending a message
+navigates to `/prompt/<id>`) does not lose what was already recorded; run
+`__dgwReset()` to start over. `__dgwCheck()` reports the three counts that say
+whether a capture is complete: outbound Data (the prompt was sent), inbound Data
+(the reply arrived) and inbound EndOfData (the reply finished).
+
 Install it, open meta.ai, chat, then run `__dgwDump()` in the console. It writes a
 tab-separated file (`direction type typeName declared_len byte_len at b64`) you can
 read with a few lines of Python. `__dgwInbound()` prints a table of received

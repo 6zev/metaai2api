@@ -12,7 +12,44 @@
   'use strict';
 
   // Every frame the page sends or receives, in arrival order.
-  const frames = [];
+  //
+  // Persisted to sessionStorage because the page can reload mid-capture (the
+  // composer navigates to /prompt/<id> when a message is sent, which was losing
+  // everything recorded before the reply arrived).
+  const KEY = '__dgw_frames_v1';
+  let frames = [];
+  try {
+    const saved = sessionStorage.getItem(KEY);
+    if (saved) frames = JSON.parse(saved);
+  } catch (e) { frames = []; }
+
+  let saveTimer = null;
+  function persist() {
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      try { sessionStorage.setItem(KEY, JSON.stringify(frames)); } catch (e) {}
+    }, 100);
+  }
+
+  // Write immediately, ignoring the debounce, so a dump taken right after a
+  // frame is not missing it.
+  function flush() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    try { sessionStorage.setItem(KEY, JSON.stringify(frames)); } catch (e) {}
+  }
+
+  // Re-read from storage so a helper called after a reload sees everything,
+  // even if this closure's array is stale (the script can be evaluated twice
+  // on one page: once at document-start, once after a soft navigation).
+  function sync() {
+    flush();
+    try {
+      const saved = sessionStorage.getItem(KEY);
+      if (saved) frames = JSON.parse(saved);
+    } catch (e) {}
+    return frames;
+  }
 
   // A DGW frame starts with its type byte. Anything from StreamGroup_EstabStream
   // upward is a grouped stream frame; the rest are control frames we keep too,
@@ -87,6 +124,7 @@
       b64: b64,
       at: new Date().toISOString(),
     });
+    persist();
     console.log('[dgw] ' + dir + ' ' + (NAME[type] || type) + ' len=' + len);
   }
 
@@ -129,6 +167,7 @@
 
   // ---- download: one click, everything at once ----
   window.__dgwDump = function () {
+    sync();
     const lines = frames.map(f => [f.direction, f.type, f.typeName, f.len, f.bytes, f.at, f.b64].join('\t'));
     const header = ['direction', 'type', 'typeName', 'declared_len', 'byte_len', 'at', 'b64'].join('\t');
     const text = header + '\n' + lines.join('\n');
@@ -151,7 +190,7 @@
 
   // Convenience: only the inbound blocks, plus a reminder if there are none.
   window.__dgwInbound = function () {
-    const inb = frames.filter(f => f.direction === 'in');
+    const inb = sync().filter(f => f.direction === 'in');
     if (!inb.length) {
       console.warn('[dgw] no inbound frames yet — send a message and wait for the reply to finish');
       return 0;
@@ -160,5 +199,25 @@
     return inb.length;
   };
 
-  console.log('[dgw] websocket capture armed. Chat normally, then run __dgwDump() in the console.');
+  window.__dgwReset = function () {
+    frames = [];
+    try { sessionStorage.removeItem(KEY); } catch (e) {}
+    console.log('[dgw] cleared');
+  };
+
+  console.log('[dgw] websocket capture armed (' + frames.length + ' frames restored). ' +
+    'Send a message, WAIT for the whole reply, then run __dgwDump().');
+
+  // Warn about the two ways a capture ends up incomplete.
+  window.__dgwCheck = function () {
+    sync();
+    const outData = frames.filter(f => f.direction === 'out' && f.type === 13).length;
+    const inData = frames.filter(f => f.direction === 'in' && f.type === 13).length;
+    const inEnd = frames.filter(f => f.direction === 'in' && f.type === 14).length;
+    console.log('[dgw] out Data=' + outData + '  in Data=' + inData + '  in EndOfData=' + inEnd);
+    if (outData === 0) console.warn('[dgw] no outbound prompt frame — you dumped before sending?');
+    if (inData === 0) console.warn('[dgw] no inbound Data — the reply has not arrived yet; wait longer');
+    if (inEnd === 0) console.warn('[dgw] no EndOfData — the reply may still be streaming');
+    return { outData, inData, inEnd };
+  };
 })();
